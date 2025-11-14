@@ -1,0 +1,170 @@
+version: "3.1"
+
+stories:
+  - story: show all appointments
+    steps:
+      - intent: show_all_appointments
+      - action: utter_show_all_appointments
+
+  - story: Reschedule Appointment
+    steps:
+      - intent: reschedule_appointment
+      - action: utter_reschedule_appointment
+
+  - story: User books an appointment
+    steps:
+      - intent: book_appointment
+      - action: utter_book_appointment
+      - intent: describe_problem
+      - action: action_describe_problem
+      - action: appointment_form
+      - active_loop: appointment_form
+
+  - story: Cancel appointment
+    steps:
+      - intent: cancel_appointment
+      - action: utter_cancel_appointment
+
+  - story: Show health alerts
+    steps:
+      - intent: show_health_alerts
+      - action: utter_show_health_alerts
+
+  - story: Show sleep and stress levels
+    steps:
+      - intent: show_sleep_stress
+      - action: utter_show_sleep_stress
+
+  - story: Show blood sugar levels
+    steps:
+      - intent: show_blood_sugar_optimization
+      - action: utter_show_blood_sugar_optimization
+
+  - story: Show hospital location
+    steps:
+      - intent: show_hospital_location
+      - action: utter_show_hospital_location
+
+  - story: show hospital policies and procedures
+    steps:
+      - intent: show_hospital_policies_and_procedures
+      - action: utter_show_hospital_policies_and_procedures
+
+  - story: aws_bedrock_chat
+    steps:
+      - intent: aws_bedrock_chat
+      - action: action_aws_bedrock_chat
+
+  - story: openai
+    steps:
+      - intent: request_patient_history
+      - action: utter_request_patient_history
+
+  - story: openai
+    steps:
+      - intent: request_billing_info
+      - action: utter_request_billing_info
+
+  - story: openai
+    steps:
+      - intent: request_medical_info
+      - action: utter_request_medical_info
+
+  - story: Insurance information
+    steps:
+      - intent: request_insurance_info
+      - action: action_insurance_info
+
+  - story: Insurance plans
+    steps:
+      - intent: request_insurance_plans
+      - action: action_insurance_plans
+
+  - story: Insurance suggestions
+    steps:
+      - intent: request_insurance_suggestions
+      - action: action_insurance_suggestions
+
+  - story: Doctors list
+    steps:
+      - intent: request_doctors_list
+      - action: action_doctors_list
+
+  - story: Nearby hospitals
+    steps:
+      - intent: request_nearby_hospitals
+      - action: action_nearby_hospitals
+
+  - story: WhatsApp reminder
+    steps:
+      - intent: request_whatsapp_reminder
+      - action: action_whatsapp_reminder
+
+  - story: Country services
+    steps:
+      - intent: request_country_services
+      - action: action_country_services
+
+  - story: Provide location
+    steps:
+      - intent: provide_location
+      - action: action_country_services
+
+  - story: Health predictions
+    steps:
+      - intent: request_health_predictions
+      - action: action_health_predictions
+
+  - story: Health recommendations
+    steps:
+      - intent: request_health_recommendations
+      - action: action_health_recommendations
+
+  - story: Patient registration
+    steps:
+      - intent: patient_registration
+      - action: patient_registration_form
+      - active_loop: patient_registration_form
+      - action: action_patient_registration
+
+  - story: Emergency help
+    steps:
+      - intent: emergency_help
+      - action: action_emergency_detection
+
+  - story: Symptom assessment
+    steps:
+      - intent: symptom_assessment
+      - action: symptom_assessment_form
+      - active_loop: symptom_assessment_form
+      - action: action_symptom_assessment
+
+  - story: Medication management
+    steps:
+      - intent: medication_reminder
+      - action: action_medication_management
+
+  - story: Mental health screening
+    steps:
+      - intent: mental_health_screening
+      - action: action_mental_health_screening
+
+  - story: Health education
+    steps:
+      - intent: health_education
+      - action: action_health_education
+
+  - story: Language change
+    steps:
+      - intent: language_change
+      - action: action_language_change
+
+  - story: Accessibility support
+    steps:
+      - intent: accessibility_request
+      - action: action_accessibility_support
+
+  - story: Voice interaction
+    steps:
+      - intent: voice_interaction
+      - action: action_voice_interaction

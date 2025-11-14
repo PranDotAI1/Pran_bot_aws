@@ -1,0 +1,270 @@
+version: "3.1"
+
+intents:
+  - aws_bedrock_chat
+  - book_appointment
+  - describe_problem
+  - provide_user_id
+  - provide_date
+  - provide_time
+  - show_all_appointments
+  - cancel_appointment
+  - reschedule_appointment
+  - show_health_alerts
+  - show_sleep_stress
+  - show_blood_sugar_optimization
+  - show_hospital_location
+  - show_hospital_policies_and_procedures
+  - request_patient_history
+  - request_billing_info
+  - request_medical_info
+  - request_insurance_info
+  - request_insurance_plans
+  - request_insurance_suggestions
+  - request_doctors_list
+  - request_nearby_hospitals
+  - request_whatsapp_reminder
+  - request_country_services
+  - provide_location
+  - request_health_predictions
+  - request_health_recommendations
+  - patient_registration
+  - update_profile
+  - view_profile
+  - emergency_help
+  - symptom_assessment
+  - medication_reminder
+  - chronic_disease_tracking
+  - mental_health_screening
+  - telemedicine_booking
+  - health_education
+  - lab_results_inquiry
+  - family_health_management
+  - accessibility_request
+  - language_change
+  - voice_interaction
+  - telemedicine_consultation
+  - accessibility_support
+  - multi_language_support
+  - analytics_dashboard
+
+entities:
+  - user_id
+  - date
+  - time
+  - symptom
+  - location
+  - insurance_type
+  - country
+  - name
+  - age
+  - gender
+  - phone
+  - email
+  - emergency_contact
+  - medical_condition
+  - medication_name
+  - dosage
+  - frequency
+  - language_preference
+  - accessibility_need
+  - disease_type
+  - blood_glucose
+  - blood_pressure
+  - weight
+  - family_member
+  - lab_test
+  - test_result
+  - language_code
+
+slots:
+  user_id:
+    type: text
+    influence_conversation: false
+    mappings:
+      - type: from_entity
+        entity: user_id
+  date:
+    type: text
+    influence_conversation: false
+    mappings:
+      - type: from_entity
+        entity: date
+  time:
+    type: text
+    influence_conversation: false
+    mappings:
+      - type: from_entity
+        entity: time
+
+forms:
+  appointment_form:
+    required_slots:
+      - user_id
+      - date
+      - time
+  
+  patient_registration_form:
+    required_slots:
+      - name
+      - age
+      - gender
+      - phone
+      - email
+      - emergency_contact
+  
+  symptom_assessment_form:
+    required_slots:
+      - symptom
+      - duration
+      - severity
+      - associated_symptoms
+
+responses:
+  utter_ask_user_id:
+    - text: "Please provide your user ID."
+
+  utter_ask_date:
+    - text: "On which date do you want the appointment?"
+
+  utter_ask_time:
+    - text: "At what time do you want the appointment?"
+
+  utter_confirmation:
+    - text: "Your appointment has been booked successfully."
+
+  utter_show_all_appointments:
+    - text: "Here are all your appointments."
+
+  utter_book_appointment:
+    - text: "I'd be happy to help you. Could you please tell me what symptoms or issues you're experiencing?"
+
+  utter_cancel_appointment:
+    - text: "Select the appointment you want to cancel."
+
+  utter_show_blood_sugar_optimization:
+    - text: "Here are your blood sugar optimization results."
+
+  utter_show_health_alerts:
+    - text: "Here are your health alerts."
+
+  utter_show_sleep_stress:
+    - text: "Here are your sleep and stress levels."
+
+  utter_show_hospital_policies_and_procedures:
+    - text: "Here are the hospital policies and procedures."
+
+  utter_show_hospital_location:
+    - text: "Here is the location of our hospital."
+
+  utter_request_patient_history:
+    - text: "Here are the patient history."
+
+  utter_request_billing_info:
+    - text: "Here are the billing info."
+
+  utter_request_medical_info:
+    - text: "Here are the medical info."
+  utter_reschedule_appointment:
+    - text: "Please Reschedule your Appointment."
+  utter_request_insurance_info:
+    - text: "Here is your insurance information."
+  utter_request_insurance_plans:
+    - text: "Here are the available insurance plans."
+  utter_request_insurance_suggestions:
+    - text: "Here are some insurance suggestions based on your profile."
+  utter_request_doctors_list:
+    - text: "Here is the list of available doctors."
+  utter_request_nearby_hospitals:
+    - text: "Here are the nearby hospitals."
+  utter_request_whatsapp_reminder:
+    - text: "I'll send you a WhatsApp reminder for your appointment."
+  utter_request_country_services:
+    - text: "Here are the services available in your country."
+  utter_ask_location:
+    - text: "Please provide your location or country to get country-specific services."
+  utter_request_health_predictions:
+    - text: "Here are your personalized health predictions and insights."
+  utter_request_health_recommendations:
+    - text: "Here are your personalized health recommendations."
+  utter_patient_registration:
+    - text: "Let's get you registered. I'll need some basic information."
+  utter_ask_name:
+    - text: "What is your full name?"
+  utter_ask_age:
+    - text: "What is your age?"
+  utter_ask_gender:
+    - text: "What is your gender? (Male/Female/Other)"
+  utter_ask_phone:
+    - text: "What is your phone number?"
+  utter_ask_email:
+    - text: "What is your email address?"
+  utter_ask_emergency_contact:
+    - text: "Who should we contact in case of emergency? Please provide their name and phone number."
+  utter_registration_complete:
+    - text: "Registration complete! Welcome to our healthcare system."
+  utter_emergency_help:
+    - text: "EMERGENCY DETECTED! Please call 911 immediately or go to the nearest emergency room."
+  utter_symptom_assessment:
+    - text: "Let me help assess your symptoms. Please describe what you're experiencing."
+  utter_medication_reminder:
+    - text: "Medication reminder: It's time to take your medication."
+  utter_mental_health_screening:
+    - text: "Let's check on your mental health. How are you feeling today?"
+  utter_telemedicine_booking:
+    - text: "I can help you book a telemedicine consultation."
+  utter_health_education:
+    - text: "Here's some health education information for you."
+  utter_lab_results:
+    - text: "Here are your lab results and what they mean."
+  utter_family_health:
+    - text: "Let's manage your family's health together."
+  utter_accessibility_help:
+    - text: "I'm here to help with accessibility needs. How can I assist you?"
+  utter_language_change:
+    - text: "Language changed successfully. How can I help you?"
+  utter_voice_interaction:
+    - text: "Voice interaction is now enabled. You can speak to me."
+  utter_chronic_disease_tracking:
+    - text: "Let's track your chronic disease management."
+  utter_multi_language:
+    - text: "Multi-language support is now available."
+  utter_analytics_dashboard:
+    - text: "Here's your health analytics dashboard."
+
+actions:
+  - action_submit_appointment
+  - action_describe_problem
+  - action_aws_bedrock_chat
+  - action_default_fallback
+  - action_insurance_info
+  - action_insurance_plans
+  - action_insurance_suggestions
+  - action_doctors_list
+  - action_nearby_hospitals
+  - action_whatsapp_reminder
+  - action_country_services
+  - action_health_predictions
+  - action_health_recommendations
+  - action_patient_registration
+  - action_update_profile
+  - action_view_profile
+  - action_emergency_detection
+  - action_symptom_assessment
+  - action_medication_management
+  - action_chronic_disease_tracking
+  - action_mental_health_screening
+  - action_telemedicine_booking
+  - action_health_education
+  - action_lab_results
+  - action_family_health
+  - action_accessibility_support
+  - action_language_change
+  - action_voice_interaction
+  - action_telemedicine_consultation
+  - action_multi_language_support
+  - action_analytics_dashboard
+
+session_config:
+  session_expiration_time: 300
+  carry_over_slots_to_new_session: true

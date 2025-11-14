@@ -1,0 +1,505 @@
+version: "3.1"
+
+nlu:
+  - intent: aws_bedrock_chat
+    examples: |
+      - What are the symptoms of diabetes?
+      - How can I treat a minor burn?
+      - What is the best way to cure a headache?
+      - What are the side effects of aspirin?
+      - Can you tell me about common flu symptoms?
+      - How do I know if I have food poisoning?
+      - What should I do if I get a bee sting?
+      - Is ibuprofen safe for children?
+      - What is the treatment for high blood pressure?
+      - Can you explain asthma and its causes?
+      - How does a fever affect the body?
+      - What are the common cold symptoms?
+      - How can I prevent getting sick?
+      - What are the first signs of dehydration?
+      - What should I do in case of a sprained ankle?
+      - How can I relieve stomach pain naturally?
+      - What are the symptoms of a heart attack?
+      - I am suffering from cold and cough
+      - I have a cold
+      - I'm coughing a lot
+      - I feel sick
+      - What should I do for my cold?
+      - How to treat cough?
+      - I have fever and cold
+      - My throat hurts
+      - I have a runny nose
+      - I feel unwell
+      - What medicine should I take?
+      - Help me with my symptoms
+      - I don't feel good
+      - I need medical advice
+      - Can you help me?
+      - What's wrong with me?
+      - I have symptoms
+      - Tell me about my condition
+      - What insurance plans do you have?
+      - How does insurance work here?
+      - What's covered by my insurance?
+      - Can you explain my insurance benefits?
+      - What insurance should I get?
+      - How do I verify my insurance?
+      - Tell me about insurance coverage
+      - What are the insurance options?
+      - How much will insurance cost?
+      - Does insurance cover this procedure?
+      - How do I book an appointment?
+      - Can I schedule a visit?
+      - How do appointments work?
+      - What doctors are available?
+      - When can I see a doctor?
+      - How do I reschedule my appointment?
+      - Can I cancel my appointment?
+      - Tell me about appointment scheduling
+      - What's the process for booking?
+      - How do I find the right doctor?
+      - Help me find a gynecologist
+      - I need a gynecologist
+      - Find me a gynecologist
+      - I'm looking for a gynecologist
+      - Can you help me find a doctor?
+      - I need to find a specialist
+      - Help me find a cardiologist
+      - I need a neurologist
+      - Find me a dermatologist
+      - I'm looking for a pediatrician
+      - What services do you offer?
+      - How does this platform work?
+      - What can you help me with?
+      - Tell me about your features
+      - What are all the services available?
+      - How do I use this healthcare platform?
+      - What can I do here?
+      - Explain all your services
+      - What features are available?
+      - How does the system work?
+
+  - intent: book_appointment
+    examples: |
+      - I want to book an appointment
+      - Schedule a doctor appointment for me
+      - Book a visit with a doctor
+
+  - intent: describe_problem
+    examples: |
+      - I have a [severe headache](symptom)
+      - I'm experiencing [stomach pain](symptom)
+      - I feel [very weak](symptom)
+      - My child has a [fever](symptom)
+      - I've been [coughing](symptom) for two days
+      - I have [chest pain](symptom)
+      - I [feel dizzy](symptom) and [nauseous](symptom)
+      - I am feeling [nauseous](symptom)
+      - I have a [migraine](symptom) that won't go away
+      - My child has [stomach cramps](symptom)
+      - I've been having [difficulty breathing](symptom)
+      - I'm experiencing [back pain](symptom)
+      - I have a [fever and sore throat](symptom)
+      - My [knees hurt](symptom) when I walk
+      - I've been [vomiting](symptom) for two days
+      - I feel [extremely tired](symptom)
+      - I have [allergy symptoms](symptom)
+
+  - intent: provide_user_id
+    examples: |
+      - My user ID is [67cec7379e26a1c964ae6d0a](user_id)
+      - The patient ID is [67cec7379e26a1c964ae6d0a](user_id)
+      - Patient ID: [67cec7379e26a1c964ae6d0a](user_id)
+      - The user's ID for the booking is [67cec7379e26a1c964ae6d0a](user_id)
+
+  - intent: provide_date
+    examples: |
+      - I need an appointment on [10-04-2025](date)
+      - Can you book me an appointment on [2025-05-15](date)?
+      - Schedule my check-up on [2025-07-01](date)
+      - Can you confirm an appointment for [2025-03-28](date)?
+      - I want to book a slot for [2025-08-05](date)
+      - Reserve a consultation on [10-04-2025](date)
+      - I'd like to schedule an appointment for [2025-10-30](date)
+      - Can I get an appointment for [10-04-2025](date)?
+
+  - intent: provide_time
+    examples: |
+      - Schedule my appointment for [9:00 AM](time)
+      - Can you book me an appointment at [2:45 PM](time)?
+      - I prefer an appointment in the morning, around [8:00 AM](time)
+      - Schedule my check-up at [11:15 AM](time)
+      - I want to book a slot in the evening at [5:30 PM](time)
+      - I'd like to schedule an appointment at [4:00 PM](time)
+
+  - intent: show_all_appointments
+    examples: |
+      - Show me all my appointments
+      - List all my appointments
+      - Display all my bookings
+      - Show my appointments
+      - List all my visits
+      - Display all my appointments
+      - Show me my appointments
+      - List all my bookings
+
+  - intent: cancel_appointment
+    examples: |
+      - I want to cancel my appointment
+      - Cancel my doctor visit
+      - I need to cancel my appointment
+      - I want to cancel my visit
+      - I need to cancel my doctor appointment
+      - I want to cancel my booking
+      - I need to cancel my booking
+      - I want to cancel my consultation
+      - I need to cancel my consultation
+      - I want to cancel my check-up
+      - I need to cancel my check-up
+
+  - intent: reschedule_appointment
+    examples: |
+      - I need to reschedule my appointment.
+      - Can I change my appointment time?
+      - I want to move my appointment to a different date.
+      - Is it possible to reschedule my booking?
+      - I'd like to postpone my appointment.
+      - Can I book a new time for my appointment?
+      - I need to change my appointment slot.
+      - How do I reschedule my meeting?
+      - I won't be able to make it, can we reschedule?
+      - Please help me change my appointment to another day.
+      - Can we shift my appointment to next week?
+      - I need to adjust my appointment time.
+      - Can I pick a different date for my appointment?
+      - Something came up, can I reschedule?
+      - I want to change my scheduled appointment.
+
+  - intent: show_health_alerts
+    examples: |
+      - show me my health alerts
+      - display my health alerts
+      - list my health alerts
+      - show my health status 
+      - my health ?
+      - health status
+
+  - intent: show_sleep_stress
+    examples: |
+      - show me my sleep and stress levels
+      - display my sleep and stress levels
+      - list my sleep and stress levels
+      - show my sleep and stress levels
+      - my sleep and stress levels
+      - sleep and stress levels
+      - show me my sleep status
+      - display my sleep status
+
+  - intent: show_blood_sugar_optimization
+    examples: |
+      - show me my blood sugar levels
+      - display my blood sugar levels
+      - list my blood sugar levels
+      - show my blood sugar levels
+      - my blood sugar levels
+      - blood sugar levels
+      - show me my blood sugar status
+      - display my blood sugar status
+
+  - intent: show_hospital_location
+    examples: |
+      - Where is the your hospital?
+      - What is the location of your hospital?
+      - Can you tell me the address of your hospital?
+      - Where is your clinic located?
+      - What is the address of your clinic?
+      - what is your location?
+      - where are you located?
+      - where is your hospital situated?
+      - what is the location of your clinic?
+
+  - intent: show_hospital_policies_and_procedures
+    examples: |
+      - What are the hospital policies and procedures?
+      - Can you tell me about the hospital policies?
+      - What are the procedures at the hospital?
+      - What are the hospital rules?
+      - Can you explain the hospital policies?
+      - What are the hospital regulations?
+      - What are the hospital guidelines?
+      - Can you tell me about the hospital procedures?
+      - What are the hospital protocols?
+      - What are the hospital standards?
+      - Can you explain the hospital policies and procedures?
+      - What are the hospital policies and procedures?
+      - Can you tell me about the hospital policies?
+      - What are the procedures at the hospital?
+      - What are the hospital rules?
+      - Can you explain the hospital policies?
+      - What are the hospital regulations?
+      - What are the hospital guidelines?
+      - Can you tell me about the hospital procedures?
+      - What are the hospital protocols?
+      - What are the hospital standards?
+      - Can you explain the hospital policies and procedures?
+
+  - intent: request_medical_info
+    examples: |
+      - Can you provide my medical information?
+      - I need my medical information.
+      - Give me my medical report.
+      - Download my medical information.
+      - Where can I get my medical info?
+      - Provide my medical file.
+      - I want to download my medical information.
+
+  - intent: request_billing_info
+    examples: |
+      - Can you provide my billing information?
+      - I need my billing infot.
+      - Give me my billing details.
+      - Download my billing report.
+      - Where can I get my billing information?
+      - Provide my billing history.
+      - I want to download my billing statement.
+
+  - intent: request_patient_history
+    examples: |
+      - Can you provide my patient history?
+      - I need my patient history.
+      - Give me my patient records.
+      - Download my patient history report.
+      - Where can I get my patient history?
+      - Provide my medical records.
+      - I want to download my patient history.
+
+  - intent: request_insurance_info
+    examples: |
+      - What is my insurance information?
+      - Show me my insurance details.
+      - Can you provide my insurance info?
+      - I need my insurance information.
+      - Display my insurance policy.
+      - What are my insurance benefits?
+      - Show my insurance coverage.
+      - I want to see my insurance details.
+
+  - intent: request_insurance_plans
+    examples: |
+      - What insurance plans are available?
+      - Show me available insurance plans.
+      - What are the insurance options?
+      - Display insurance plans.
+      - I want to see insurance plans.
+      - What insurance coverage options do you have?
+      - Show me insurance options.
+      - What are the available insurance plans?
+
+  - intent: request_insurance_suggestions
+    examples: |
+      - Can you suggest insurance for me?
+      - What insurance should I get?
+      - Recommend insurance plans.
+      - Suggest insurance based on my needs.
+      - What insurance is best for me?
+      - Help me choose insurance.
+      - I need insurance recommendations.
+      - What insurance do you recommend?
+
+  - intent: request_doctors_list
+    examples: |
+      - Show me the list of doctors.
+      - What doctors are available?
+      - Display available doctors.
+      - I want to see doctors list.
+      - Show me doctors.
+      - What doctors do you have?
+      - List all doctors.
+      - I need to see available doctors.
+      - Show me all available doctors
+      - Show all doctors
+      - I want to see all doctors
+      - Can you show me all doctors?
+      - Help me find a gynecologist
+      - I need a cardiologist
+      - Find me a dermatologist
+      - I need a general physician
+      - Find me a general practitioner
+      - Help me find a GP
+      - I want to see a family doctor
+      - Show me general physicians
+      - Find a general doctor
+      - Search for general practitioner
+      - Find GP doctor
+      - I want to see a family doctor
+      - Show me general physicians available
+      - Help me find a general doctor
+
+  - intent: request_nearby_hospitals
+    examples: |
+      - Show me nearby hospitals.
+      - What hospitals are near me?
+      - Find hospitals near my location.
+      - I need nearby hospitals.
+      - Show hospitals in my area.
+      - What hospitals are close by?
+      - Find hospitals close to me.
+      - I want to see nearby hospitals.
+
+  - intent: request_whatsapp_reminder
+    examples: |
+      - Send me a WhatsApp reminder.
+      - I want WhatsApp reminders.
+      - Set up WhatsApp notifications.
+      - Can you send WhatsApp reminders?
+      - I need WhatsApp reminders for appointments.
+      - Set up WhatsApp alerts.
+      - Send me appointment reminders via WhatsApp.
+      - I want to receive WhatsApp notifications.
+
+  - intent: request_country_services
+    examples: |
+      - What services are available in my country?
+      - Show me country-specific services.
+      - What healthcare services are available here?
+      - I need services for my location.
+      - What medical services are available in my area?
+      - Show me local healthcare options.
+      - What services do you have for my country?
+      - I want to see country-specific healthcare.
+
+  - intent: provide_location
+    examples: |
+      - I am in [United States](location)
+      - My location is [India](location)
+      - I live in [Canada](location)
+      - I am from [United Kingdom](location)
+      - My country is [Australia](location)
+      - I am located in [Germany](location)
+      - I am in [New York](location)
+      - I live in [Mumbai](location)
+      - I am from [Toronto](location)
+      - My location is [London](location)
+
+  - intent: request_health_predictions
+    examples: |
+      - What are my health predictions?
+      - Show me my health insights.
+      - What does my health data predict?
+      - I want to see my health predictions.
+      - Can you predict my health trends?
+      - Show me my health forecast.
+      - What are my health analytics?
+      - I need health predictions.
+
+  - intent: request_health_recommendations
+    examples: |
+      - What are my health recommendations?
+      - Give me personalized health advice.
+      - What should I do for my health?
+      - I want health recommendations.
+      - Can you suggest health improvements?
+      - Show me my health action plan.
+      - What are my personalized health tips?
+      - I need health guidance.
+
+  - intent: patient_registration
+    examples: |
+      - I want to register as a new patient.
+      - I need to create an account.
+      - I'm a new patient.
+      - I want to sign up.
+      - Register me for healthcare services.
+      - I need to create a patient profile.
+      - I want to join the healthcare system.
+      - Help me register.
+
+  - intent: emergency_help
+    examples: |
+      - I'm having a heart attack.
+      - I can't breathe.
+      - I'm bleeding severely.
+      - I think I'm having a stroke.
+      - I need emergency help.
+      - This is an emergency.
+      - I'm unconscious.
+      - I'm having a seizure.
+      - I want to hurt myself.
+      - I'm having severe chest pain.
+
+  - intent: symptom_assessment
+    examples: |
+      - I have symptoms I need assessed.
+      - Can you help me understand my symptoms?
+      - I'm feeling sick and need help.
+      - I have [chest pain](symptom) for [2 hours](duration).
+      - My [headache](symptom) is [severe](severity).
+      - I need symptom analysis.
+      - Help me assess my condition.
+      - I'm experiencing symptoms.
+
+  - intent: medication_reminder
+    examples: |
+      - I need medication reminders.
+      - Remind me to take my medicine.
+      - I forgot to take my medication.
+      - When should I take my pills?
+      - I need help with my medications.
+      - Set up medication alerts.
+      - I want medication management.
+      - Help me track my medicines.
+
+  - intent: mental_health_screening
+    examples: |
+      - I need mental health help.
+      - I'm feeling depressed.
+      - I'm anxious and worried.
+      - I need mental health screening.
+      - I'm having mental health issues.
+      - I feel hopeless.
+      - I need emotional support.
+      - I'm struggling mentally.
+
+  - intent: health_education
+    examples: |
+      - I want health education.
+      - Teach me about health.
+      - I need health information.
+      - What should I know about health?
+      - Give me health tips.
+      - I want to learn about wellness.
+      - Health education please.
+      - Tell me about healthy living.
+
+  - intent: language_change
+    examples: |
+      - Change language to Spanish.
+      - I want to speak in Hindi.
+      - Switch to French.
+      - Change to Chinese.
+      - I prefer English.
+      - Can you speak in my language?
+      - Language change please.
+      - I want a different language.
+
+  - intent: accessibility_request
+    examples: |
+      - I'm visually impaired.
+      - I need voice assistance.
+      - I have hearing problems.
+      - I need accessibility help.
+      - I'm disabled and need assistance.
+      - I need special accommodations.
+      - I have mobility issues.
+      - Help me with accessibility.
+
+  - intent: voice_interaction
+    examples: |
+      - I want to use voice commands.
+      - Enable voice interaction.
+      - I want to speak to you.
+      - Turn on voice mode.
+      - I prefer voice communication.
+      - Can you hear me?
+      - Voice interaction please.
+      - I want to talk instead of type.

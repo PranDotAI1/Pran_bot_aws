@@ -1,0 +1,2524 @@
+from typing import Any, Text, Dict, List
+from rasa_sdk import Action, Tracker
+from rasa_sdk.executor import CollectingDispatcher
+import boto3
+import json
+import requests
+from typing import Any, Dict, List, Text
+from rasa_sdk import Action
+from rasa_sdk.executor import CollectingDispatcher
+from rasa_sdk.interfaces import Tracker
+from rasa_sdk.events import SlotSet
+import os
+from dotenv import load_dotenv
+import psycopg2
+import psycopg2.pool
+from datetime import datetime, timedelta
+import logging
+
+# Import RAG system and AWS Intelligence
+try:
+    from .rag_system import RAGRetriever
+    from .aws_intelligence import AWSIntelligenceServices
+except ImportError:
+    # Fallback if relative import doesn't work
+    import sys
+    sys.path.append(os.path.dirname(__file__))
+    from rag_system import RAGRetriever
+    from aws_intelligence import AWSIntelligenceServices
+
+load_dotenv()
+
+REACT_APP_DUMMY_API = os.getenv("REACT_APP_DUMMY_API")
+
+# Database configuration
+DB_CONFIG = {
+    'host': os.getenv('AURORA_ENDPOINT') or os.getenv('DB_HOST'),
+    'database': os.getenv('DB_NAME', 'postgres'),
+    'user': os.getenv('DB_USER', 'postgres'),
+    'password': os.getenv('DB_PASSWORD'),
+    'port': int(os.getenv('DB_PORT', '5432'))
+}
+
+# Legacy RDS configuration
+RDS_CONFIG = {
+    'host': os.getenv('RDS_HOST'),
+    'database': 'pran_chatbot',
+    'user': 'admin',
+    'password': os.getenv('RDS_PASSWORD'),
+    'port': 5432
+}
+
+# Create connection pool
+try:
+    db_pool = psycopg2.pool.SimpleConnectionPool(
+        minconn=1,
+        maxconn=10,
+        **DB_CONFIG
+    )
+except Exception as e:
+    logging.warning(f"Could not create database pool, will use direct connections: {e}")
+    db_pool = None
+
+class DatabaseHelper:
+    """Helper class for database operations with intelligent conversation support"""
+    
+    @staticmethod
+    def get_connection():
+        """Get database connection from pool or create new with timeout"""
+        try:
+            if db_pool:
+                conn = db_pool.getconn()
+                # Set connection timeout
+                conn.set_session(autocommit=False)
+                return conn
+            else:
+                # Add connect_timeout to prevent hanging
+                config = DB_CONFIG.copy()
+                config['connect_timeout'] = 5
+                return psycopg2.connect(**config)
+        except Exception as e:
+            logging.error(f"Database connection error: {e}")
+            try:
+                # Fallback to RDS with timeout
+                rds_config = RDS_CONFIG.copy()
+                rds_config['connect_timeout'] = 5
+                return psycopg2.connect(**rds_config)
+            except Exception as e2:
+                logging.error(f"RDS connection error: {e2}")
+                return None
+    
+    @staticmethod
+    def return_connection(conn):
+        """Return connection to pool"""
+        try:
+            if db_pool and conn:
+                db_pool.putconn(conn)
+            elif conn:
+                conn.close()
+        except Exception as e:
+            logging.error(f"Error returning connection: {e}")
+    
+    @staticmethod
+    def get_insurance_plans():
+        """Get insurance plans from database with timeout"""
+        conn = DatabaseHelper.get_connection()
+        if not conn:
+            return None
+        
+        try:
+            cursor = conn.cursor()
+            # Set statement timeout to prevent hanging
+            cursor.execute("SET statement_timeout = '3s'")
+            # Try to get from database, fallback to default if table doesn't exist
+            try:
+                cursor.execute("""
+                    SELECT plan_name, monthly_premium, deductible, coverage_percentage, features
+                    FROM insurance_plans
+                    WHERE is_active = true
+                    ORDER BY monthly_premium
+                    LIMIT 10
+                """)
+                plans = cursor.fetchall()
+                if plans:
+                    return [{
+                        'name': p[0],
+                        'monthly_premium': f"${p[1]}",
+                        'deductible': f"${p[2]}",
+                        'coverage': f"{p[3]}%",
+                        'features': p[4] if isinstance(p[4], list) else p[4].split(',') if p[4] else []
+                    } for p in plans]
+            except Exception as e:
+                # Table doesn't exist or query failed, return None to use fallback
+                logging.debug(f"Insurance plans query failed (using fallback): {e}")
+                pass
+            cursor.close()
+            return None
+        except Exception as e:
+            logging.error(f"Error fetching insurance plans: {e}")
+            return None
+        finally:
+            DatabaseHelper.return_connection(conn)
+    
+    @staticmethod
+    def get_patient_info(patient_id=None, user_id=None):
+        """Get patient information from database"""
+        conn = DatabaseHelper.get_connection()
+        if not conn:
+            return None
+        
+        try:
+            cursor = conn.cursor()
+            if patient_id:
+                cursor.execute("""
+                    SELECT patient_id, name, email, phone, date_of_birth, address, medical_history
+                    FROM medical_patients
+                    WHERE patient_id = %s
+                """, (patient_id,))
+            elif user_id:
+                cursor.execute("""
+                    SELECT patient_id, name, email, phone, date_of_birth, address, medical_history
+                    FROM medical_patients
+                    WHERE user_id = %s OR email = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, (user_id, user_id))
+            else:
+                return None
+            
+            patient = cursor.fetchone()
+            if patient:
+                return {
+                    'patient_id': patient[0],
+                    'name': patient[1],
+                    'email': patient[2],
+                    'phone': patient[3],
+                    'date_of_birth': patient[4],
+                    'address': patient[5],
+                    'medical_history': json.loads(patient[6]) if patient[6] else {}
+                }
+            cursor.close()
+            return None
+        except Exception as e:
+            logging.error(f"Error fetching patient info: {e}")
+            return None
+        finally:
+            DatabaseHelper.return_connection(conn)
+    
+    @staticmethod
+    def get_appointments(patient_id=None, user_id=None, upcoming=True):
+        """Get appointments from database"""
+        conn = DatabaseHelper.get_connection()
+        if not conn:
+            return None
+        
+        try:
+            cursor = conn.cursor()
+            if patient_id:
+                query = """
+                    SELECT appointment_id, doctor_name, department, appointment_date, 
+                           appointment_time, status, symptoms
+                    FROM medical_appointments
+                    WHERE patient_id = %s
+                """
+                params = (patient_id,)
+            elif user_id:
+                # First get patient_id from user_id
+                patient = DatabaseHelper.get_patient_info(user_id=user_id)
+                if not patient:
+                    return None
+                query = """
+                    SELECT appointment_id, doctor_name, department, appointment_date, 
+                           appointment_time, status, symptoms
+                    FROM medical_appointments
+                    WHERE patient_id = %s
+                """
+                params = (patient['patient_id'],)
+            else:
+                return None
+            
+            if upcoming:
+                query += " AND appointment_date >= CURRENT_DATE AND status != 'cancelled'"
+            query += " ORDER BY appointment_date, appointment_time"
+            
+            cursor.execute(query, params)
+            appointments = cursor.fetchall()
+            
+            if appointments:
+                return [{
+                    'appointment_id': a[0],
+                    'doctor_name': a[1],
+                    'department': a[2],
+                    'date': a[3].strftime('%Y-%m-%d') if a[3] else None,
+                    'time': a[4].strftime('%H:%M') if a[4] else None,
+                    'status': a[5],
+                    'symptoms': a[6]
+                } for a in appointments]
+            cursor.close()
+            return []
+        except Exception as e:
+            logging.error(f"Error fetching appointments: {e}")
+            return None
+        finally:
+            DatabaseHelper.return_connection(conn)
+    
+    @staticmethod
+    def get_doctors(specialty=None, department=None):
+        """Get doctors from database with timeout"""
+        conn = DatabaseHelper.get_connection()
+        if not conn:
+            return None
+        
+        try:
+            cursor = conn.cursor()
+            # Set timeout
+            cursor.execute("SET statement_timeout = '3s'")
+            query = "SELECT doctor_id, name, specialty, department, email, phone FROM medical_doctors WHERE is_active = true"
+            params = []
+            
+            if specialty:
+                # Handle general medicine with multiple search terms
+                if specialty.lower() == "general medicine":
+                    query += " AND (specialty ILIKE %s OR department ILIKE %s OR specialty ILIKE %s OR department ILIKE %s OR specialty ILIKE %s)"
+                    params.extend(["%general%", "%general%", "%family%", "%family%", "%primary%"])
+                else:
+                    query += " AND (specialty ILIKE %s OR department ILIKE %s)"
+                    params.append(f"%{specialty}%")
+                    params.append(f"%{specialty}%")
+            if department:
+                query += " AND department ILIKE %s"
+                params.append(f"%{department}%")
+            
+            query += " ORDER BY name LIMIT 10"
+            cursor.execute(query, params if params else None)
+            doctors = cursor.fetchall()
+            
+            if doctors:
+                return [{
+                    'doctor_id': d[0],
+                    'name': d[1],
+                    'specialty': d[2],
+                    'department': d[3],
+                    'email': d[4],
+                    'phone': d[5]
+                } for d in doctors]
+            cursor.close()
+            return []
+        except Exception as e:
+            logging.debug(f"Error fetching doctors (non-critical): {e}")
+            return None
+        finally:
+            DatabaseHelper.return_connection(conn)
+    
+    @staticmethod
+    def save_conversation_history(sender_id, user_message, bot_response, intent=None, entities=None):
+        """Save conversation history to database for context (non-blocking)"""
+        # Don't block on saving history - do it asynchronously if possible
+        try:
+            conn = DatabaseHelper.get_connection()
+            if not conn:
+                return False
+            
+            cursor = conn.cursor()
+            # Set timeout
+            cursor.execute("SET statement_timeout = '2s'")
+            # Create table if it doesn't exist
+            try:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS conversation_history (
+                        id SERIAL PRIMARY KEY,
+                        sender_id VARCHAR(255),
+                        user_message TEXT,
+                        bot_response TEXT,
+                        intent VARCHAR(100),
+                        entities TEXT,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+            except Exception:
+                pass  # Table might already exist
+            
+            cursor.execute("""
+                INSERT INTO conversation_history (sender_id, user_message, bot_response, intent, entities)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (sender_id, user_message, bot_response, intent, json.dumps(entities) if entities else None))
+            
+            conn.commit()
+            cursor.close()
+            return True
+        except Exception as e:
+            # Don't fail the request if history save fails
+            logging.debug(f"Error saving conversation history (non-critical): {e}")
+            return False
+        finally:
+            DatabaseHelper.return_connection(conn)
+    
+    @staticmethod
+    def get_conversation_history(sender_id, limit=5):
+        """Get recent conversation history for context with timeout"""
+        conn = DatabaseHelper.get_connection()
+        if not conn:
+            return []
+        
+        try:
+            cursor = conn.cursor()
+            # Set timeout to prevent hanging
+            cursor.execute("SET statement_timeout = '2s'")
+            cursor.execute("""
+                SELECT user_message, bot_response, intent, entities, created_at
+                FROM conversation_history
+                WHERE sender_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (sender_id, limit))
+            
+            history = cursor.fetchall()
+            cursor.close()
+            
+            # Return in reverse order (oldest first) for context
+            return [{
+                'user': h[0],
+                'bot': h[1],
+                'intent': h[2],
+                'entities': json.loads(h[3]) if h[3] else None,
+                'timestamp': h[4]
+            } for h in reversed(history)]
+        except Exception as e:
+            # Don't fail if history fetch fails - just return empty
+            logging.debug(f"Error fetching conversation history (non-critical): {e}")
+            return []
+        finally:
+            DatabaseHelper.return_connection(conn)
+
+
+class IntelligentFallback:
+    """Fallback responses when Bedrock is not available"""
+    
+    @staticmethod
+    def get_fallback_response(user_message: str, conversation_context: List[Dict] = None, retrieved_context: Dict = None) -> str:
+        """Provide intelligent fallback responses for ANY query type with context"""
+        msg_lower = user_message.lower()
+        
+        # Check conversation context for follow-up questions
+        is_followup = False
+        previous_topic = None
+        if conversation_context:
+            for msg in reversed(conversation_context[-3:]):  # Check last 3 messages
+                if msg.get("role") == "assistant":
+                    prev_text = msg.get("content", "").lower()
+                    if "appointment" in prev_text:
+                        previous_topic = "appointment"
+                    elif "insurance" in prev_text:
+                        previous_topic = "insurance"
+                    elif "doctor" in prev_text or "specialist" in prev_text:
+                        previous_topic = "doctor"
+                    break
+        
+        # Health/Symptom related
+        if any(word in msg_lower for word in ["cold", "cough", "fever", "headache", "pain", "sick", "symptom"]):
+            if "cold" in msg_lower or "cough" in msg_lower:
+                return "I understand you're experiencing cold and cough symptoms. For immediate relief, rest, stay hydrated, and consider over-the-counter cold medications. Gargle with warm salt water for cough relief. If symptoms persist for more than 10 days, you have a high fever (over 101°F), difficulty breathing, or severe headache, please see a doctor. I can help you book an appointment with a doctor or find an ENT specialist. Would you like me to help you find a doctor or book an appointment?"
+            
+            elif "headache" in msg_lower:
+                return "I understand you're experiencing a headache. Common causes include tension headaches, migraines, sinus issues, dehydration, or stress. If you have a sudden severe headache (worst of your life), headache with fever/stiff neck/confusion, headache after head injury, or vision changes, seek immediate care. I can help you book an appointment with a neurologist or general physician. Would you like me to find a doctor or schedule a consultation?"
+            
+            elif "fever" in msg_lower:
+                return "I understand you have a fever. Normal body temperature is 98.6°F (37°C), fever is 100.4°F (38°C) or higher, and high fever is 103°F (39.4°C) or higher. Please see a doctor if your fever is over 103°F, lasts more than 3 days, or is accompanied by severe symptoms like rash, difficulty breathing, or confusion. For infants under 3 months, any fever requires immediate medical attention. I can help you book an appointment with a doctor or find available urgent care. Would you like me to help you schedule a consultation?"
+            
+            else:
+                return "I understand you have health concerns. I can help you effectively! I can assist with booking appointments, finding the right specialist based on your symptoms, medication questions, locating nearby healthcare facilities, and symptom assessment. For your symptoms, I recommend describing them in detail, then I can help you find the right doctor and book an appointment for proper evaluation. Would you like me to help you find a doctor or book an appointment?"
+        
+        # Insurance related
+        elif any(word in msg_lower for word in ["insurance", "coverage", "plan", "benefit"]):
+            # Check if specifically asking for plans
+            if any(word in msg_lower for word in ["plan", "plans", "available", "show", "list", "what", "options"]):
+                return """Available Insurance Plans:
+
+1. Basic Health Plan
+   Monthly Premium: $150
+   Deductible: $1000
+   Coverage: 80%
+   Features: Primary care, Emergency visits, Basic prescriptions
+
+2. Premium Health Plan
+   Monthly Premium: $300
+   Deductible: $500
+   Coverage: 90%
+   Features: All basic features, Specialist visits, Mental health, Dental & Vision
+
+3. Family Health Plan
+   Monthly Premium: $450
+   Deductible: $750
+   Coverage: 85%
+   Features: All premium features, Family coverage, Maternity care, Pediatric care
+
+Would you like more details about any specific plan, or would you like personalized insurance recommendations based on your needs?"""
+            elif previous_topic == "insurance" or any(word in msg_lower for word in ["yes", "sure", "ok", "please", "help"]):
+                return "Great! I can verify your insurance coverage, show available insurance plans, provide personalized recommendations, check benefits and coverage details, and help you understand costs and copays. To get started, tell me your insurance provider name, ask about specific coverage questions, or request insurance plan comparisons. What would you like to know about insurance?"
+            return "I can help you with insurance! I can verify your coverage, show available plans, provide personalized recommendations, check benefits, and explain costs and copays. To get started, tell me your insurance provider name or ask about specific coverage. What would you like to know about insurance?"
+        
+        # Doctor finding related
+        elif any(word in msg_lower for word in ["find", "doctor", "gynecologist", "gynec", "obstetric", "specialist", "cardiologist", "neurologist", "dermatologist", "pediatrician"]):
+            specialty_name = "doctor"
+            if "gynecologist" in msg_lower or "gynec" in msg_lower or "obstetric" in msg_lower:
+                specialty_name = "gynecologist"
+            elif "cardiologist" in msg_lower:
+                specialty_name = "cardiologist"
+            elif "neurologist" in msg_lower:
+                specialty_name = "neurologist"
+            elif "dermatologist" in msg_lower:
+                specialty_name = "dermatologist"
+            elif "pediatrician" in msg_lower or "pediatric" in msg_lower:
+                specialty_name = "pediatrician"
+            
+            return f"I can help you find a {specialty_name}! Let me search for available {specialty_name}s in our system. I'll show you their specialties, contact information, and availability. Would you like me to help you find a {specialty_name} and book an appointment?"
+        
+        # Appointment related
+        elif any(word in msg_lower for word in ["appointment", "book", "schedule", "visit"]):
+            if previous_topic == "appointment" or any(word in msg_lower for word in ["yes", "sure", "ok", "please", "help"]):
+                return "Perfect! To book an appointment, tell me your symptoms or preferred specialty, and I'll find the right doctor for you, show available time slots, and help you complete the booking. I can also help you reschedule or cancel existing appointments, and set up appointment reminders. What symptoms do you have or which specialty are you looking for?"
+            return "I can help you book an appointment! I can schedule new appointments, find doctors by specialty or symptoms, check available time slots, reschedule or cancel appointments, and set up reminders. To get started, tell me your symptoms or preferred specialty, and I'll find the right doctor and show available times. Would you like to book an appointment now?"
+        
+        # Medication related
+        elif any(word in msg_lower for word in ["medication", "medicine", "drug", "prescription", "pill"]):
+            return "I can help with medication questions! I can check drug interactions, calculate proper dosages, create medication schedules, identify potential side effects, and help with medication management. Important: Always consult your doctor before changing medications, never stop medications without medical advice, and keep a list of all medications you're taking. What medication question can I help with?"
+        
+        # General greeting or help
+        elif any(word in msg_lower for word in ["hi", "hello", "help", "services", "what can you"]):
+            return "Hello! I'm Dr. AI, your healthcare assistant. I'm here to help with all your healthcare needs! I can assist with medical services (symptom assessment, emergency evaluation, mental health screening), appointments (book, reschedule, find doctors), insurance (verify coverage, compare plans), medications (check interactions, dosages), patient services, wellness plans, and hospital information. How can I help you today? You can say 'I need to book an appointment', 'What insurance plans do you have?', 'I have [symptoms]', or 'Help me find a doctor'. What would you like to do?"
+        
+        # Default helpful response - intelligent for ANY query
+        else:
+            # Check if we have context to enhance the response
+            enhanced_info = ""
+            if retrieved_context:
+                if retrieved_context.get('doctors'):
+                    enhanced_info += f" I found {len(retrieved_context['doctors'])} doctor(s) that might help."
+                if retrieved_context.get('insurance_plans'):
+                    enhanced_info += f" I have {len(retrieved_context['insurance_plans'])} insurance plan(s) available."
+                if retrieved_context.get('appointments'):
+                    enhanced_info += f" You have {len(retrieved_context['appointments'])} appointment(s)."
+            
+            return f"I'm here to help with all your healthcare needs! I can assist with booking appointments, insurance information and verification, finding doctors and specialists, medication questions, symptom assessment, patient services, wellness tips, and answer any healthcare-related questions.{enhanced_info} Try asking 'How do I book an appointment?', 'What services do you offer?', 'I need help with [your concern]', 'What insurance plans are available?', or ask me anything about healthcare. What can I help you with today?"
+
+
+class AWSBedrockHelper:
+    """A helper class for interacting with AWS Bedrock LLM service."""
+    
+    def __init__(self):
+        self.bedrock_client = boto3.client('bedrock-runtime', region_name=os.getenv('AWS_REGION', 'us-east-1'))
+        # Use inference profile for on-demand access
+        self.model_id = os.getenv('BEDROCK_MODEL_ID', 'anthropic.claude-3-5-sonnet-20241022-v2:0')
+        # Try alternative model IDs if the default doesn't work
+        self.fallback_models = [
+            'anthropic.claude-3-5-sonnet-20241022-v2:0',
+            'anthropic.claude-3-5-sonnet-20240620-v1:0',
+            'anthropic.claude-3-sonnet-20240229-v1:0'
+        ]
+    
+    def get_response(self, prompt: Text, conversation_history: List[Dict] = None) -> Text:
+        """Sends a prompt to AWS Bedrock and returns the response."""
+        try:
+            # Enhanced system prompt for RAG-powered intelligent healthcare assistant
+            system_prompt = """You are Dr. AI, a super intelligent RAG-powered healthcare assistant. You use Retrieval-Augmented Generation (RAG) to provide accurate, context-aware responses.
+
+RAG SYSTEM:
+- You receive RETRIEVED CONTEXT from the database containing real-time information
+- Use this context to provide accurate, specific answers
+- Reference specific doctors, insurance plans, appointments, medications, and lab results from the context
+- If context is provided, prioritize it over general knowledge
+- Always cite specific information from the retrieved context when available
+
+You have access to a complete healthcare platform with multiple services and APIs.
+
+YOUR COMPLETE CAPABILITIES & SERVICES:
+
+ MEDICAL SERVICES:
+- Symptom Assessment: Analyze symptoms, provide guidance, recommend appropriate care
+- Emergency Assessment: Evaluate emergency situations, calculate HEART scores, assess urgency
+- Mental Health: GAD-7 and PHQ-9 assessments, crisis detection, counselor recommendations
+- Medication Management: Drug interaction checking, dosage calculations, medication schedules
+- Health Education: Provide information about conditions, treatments, and wellness
+
+PATIENT MANAGEMENT:
+- Patient Registration: Help register new patients with medical history and insurance
+- Medical Records: Access and share medical records (HIPAA compliant)
+- Patient History: View complete patient medical history
+- Profile Management: Update patient profiles and information
+
+APPOINTMENTS & SCHEDULING:
+- Book Appointments: Schedule appointments with doctors
+- Find Doctors: Match symptoms to appropriate medical specializations
+- Reschedule/Cancel: Help manage existing appointments
+- Appointment Reminders: Set up WhatsApp reminders
+- Doctor Availability: Check doctor schedules and availability
+
+INSURANCE & BILLING:
+- Insurance Verification: Verify insurance coverage and benefits
+- Insurance Plans: Show available insurance plans
+- Insurance Suggestions: Recommend insurance based on needs
+- Pre-authorization: Help with pre-authorization requests
+- Cost Estimates: Provide service cost estimates
+- Payment Plans: Explain payment plan options
+- Billing Information: Access billing details and statements
+
+WELLNESS & SUPPORT:
+- Diet Recommendations: Personalized diet plans
+- Exercise Plans: Fitness and exercise recommendations
+- Sleep Hygiene: Sleep quality tips and advice
+- Clinical Guidelines: Evidence-based clinical recommendations
+
+ ANALYTICS & ADMINISTRATION:
+- Disease Trends: Analyze health trends and patterns
+- Feedback Collection: Gather patient feedback
+- Health Predictions: Predictive health analytics
+- Health Recommendations: Personalized health advice
+
+ HOSPITAL SERVICES:
+- Hospital Locations: Find nearby hospitals and clinics
+- Hospital Policies: Explain hospital policies and procedures
+- Country Services: Location-specific healthcare services
+
+YOUR INTELLIGENCE GUIDELINES:
+- Answer ANY question about ANY of these services intelligently
+- When asked about appointments, provide detailed scheduling guidance
+- When asked about insurance, explain coverage, plans, and benefits clearly
+- When asked about health/symptoms, provide medical guidance and recommendations
+- When asked about medications, explain interactions, dosages, and safety
+- Always be empathetic, clear, and helpful
+- Ask clarifying questions when needed to provide the best assistance
+- Guide users to the right service or API when appropriate
+- Provide comprehensive, actionable information
+- Remember conversation context across multiple exchanges
+
+RESPONSE STYLE:
+- Be conversational, warm, and professional
+- Provide detailed, helpful answers
+- Use examples when helpful
+- Break down complex topics into understandable parts
+- Always prioritize patient safety and well-being
+- When appropriate, suggest using specific platform features
+
+Remember: You are a complete healthcare companion that can help with EVERYTHING - from booking appointments to understanding insurance, from symptom analysis to medication management. You know about all available services and can guide users intelligently."""
+            
+            # Build conversation messages
+            messages = []
+            
+            # Add conversation history if available
+            if conversation_history:
+                messages.extend(conversation_history[-5:])  # Last 5 exchanges for context
+            
+            # Add current user message
+            messages.append({
+                "role": "user",
+                "content": prompt
+            })
+            
+            # Prepare the request body for Claude (optimized for RAG responses)
+            request_body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 1000,  # Increased for detailed RAG responses
+                "temperature": 0.7,  # Balanced creativity and accuracy
+                "system": system_prompt,
+                "messages": messages
+            }
+            
+            # Try to invoke the model with timeout protection
+            last_error = None
+            for model_id in [self.model_id] + self.fallback_models:
+                try:
+                    # Use boto3's built-in timeout via config
+                    from botocore.config import Config
+                    config = Config(
+                        connect_timeout=5,
+                        read_timeout=10,
+                        retries={'max_attempts': 1}
+                    )
+                    bedrock_client_fast = boto3.client('bedrock-runtime', 
+                                                      region_name=os.getenv('AWS_REGION', 'us-east-1'),
+                                                      config=config)
+                    
+                    response = bedrock_client_fast.invoke_model(
+                        modelId=model_id,
+                        body=json.dumps(request_body),
+                        contentType='application/json'
+                    )
+                    
+                    # Parse the response
+                    response_body = json.loads(response['body'].read())
+                    return response_body['content'][0]['text']
+                except Exception as e:
+                    last_error = e
+                    # If it's not a model ID issue, break and return error
+                    if "ValidationException" not in str(e) or "model ID" not in str(e):
+                        break
+                    continue
+            
+            # If all models failed, return helpful error
+            error_msg = str(last_error) if last_error else "Unknown error"
+            
+            # Handle specific AWS Bedrock access issues - use intelligent fallback
+            if "ResourceNotFoundException" in error_msg or "use case details" in error_msg.lower():
+                # Use intelligent fallback with conversation context
+                return IntelligentFallback.get_fallback_response(prompt, conversation_history, None)
+            
+            elif "credentials" in error_msg.lower() or "access" in error_msg.lower() or "AccessDenied" in error_msg:
+                return "I'm having trouble connecting to my AI brain right now. Please ensure AWS credentials are configured for intelligent responses."
+            elif "ValidationException" in error_msg or "model ID" in error_msg:
+                return "I'm configured to use AWS Bedrock for intelligent responses, but there's a configuration issue. The bot will still work for structured queries (appointments, insurance, etc.), but general conversation features require AWS Bedrock setup. Please configure AWS Bedrock model access or use the specific feature commands."
+            
+            # Generic error - provide helpful fallback
+            return """I encountered a technical issue, but I'm still here to help!
+
+I can assist you with:
+- Booking appointments
+- Insurance information
+- Patient management
+-  Hospital services
+-  And more!
+
+Try asking: What services do you offer? or How do I book an appointment?"""
+            
+        except Exception as e:
+            # More helpful error message
+            error_msg = str(e)
+            
+            # Handle specific AWS Bedrock access issues - use intelligent fallback
+            if "ResourceNotFoundException" in error_msg or "use case details" in error_msg.lower():
+                # Use intelligent fallback with conversation context
+                return IntelligentFallback.get_fallback_response(prompt, conversation_history, None)
+            
+            elif "credentials" in error_msg.lower() or "access" in error_msg.lower() or "AccessDenied" in error_msg:
+                return "I'm having trouble connecting to my AI brain right now. Please ensure AWS credentials are configured for intelligent responses."
+            
+            elif "ValidationException" in error_msg or "model ID" in error_msg:
+                return "I'm configured to use AWS Bedrock, but there's a model configuration issue. I can still help with structured queries (appointments, insurance, etc.)!"
+            
+            # Generic error - provide helpful fallback
+            return """I encountered a technical issue, but I'm still here to help!
+
+I can assist you with:
+- Booking appointments
+- Insurance information
+- Patient management
+-  Hospital services
+-  And more!
+
+Try asking: What services do you offer? or How do I book an appointment?"""
+
+class AWSBedrockChat(Action):
+    """Super intelligent RAG-powered chatbot with AWS services for conversational responses"""
+    
+    def __init__(self):
+        self.bedrock_helper = AWSBedrockHelper()
+        self.rag_retriever = RAGRetriever()
+        self.aws_intelligence = AWSIntelligenceServices()
+    
+    def name(self) -> Text:
+        return "action_aws_bedrock_chat"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+    
+        # Get user message
+        user_message = tracker.latest_message.get("text", "")
+        sender_id = tracker.sender_id
+        msg_lower = user_message.lower()
+        
+        # ULTRA FAST PATH: Check for simple queries FIRST (before any processing)
+        is_simple_query = any(word in msg_lower for word in [
+            "hi", "hello", "hey", "good morning", "good afternoon", "good evening",
+            "thanks", "thank you", "bye", "goodbye"
+        ])
+        
+        if is_simple_query:
+            # Instant response for greetings - NO AWS, NO RAG, NO DATABASE
+            if any(word in msg_lower for word in ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]):
+                response = "Hello! I'm Dr. AI, your healthcare assistant. I'm here to help with all your healthcare needs - appointments, insurance, finding doctors, symptom assessment, and more. How can I help you today?"
+            elif any(word in msg_lower for word in ["thanks", "thank you"]):
+                response = "You're welcome! I'm here whenever you need help with your healthcare needs. Is there anything else I can assist you with?"
+            elif any(word in msg_lower for word in ["bye", "goodbye"]):
+                response = "Goodbye! Take care of your health. Feel free to come back anytime you need assistance!"
+            else:
+                response = "Hello! How can I help you today?"
+            
+            # Return immediately - no further processing
+            dispatcher.utter_message(text=response)
+            return []
+        
+        # For complex queries, continue with RAG and AWS Intelligence
+        # RAG STEP 1: Retrieve relevant context from database
+        user_id = tracker.get_slot("user_id")
+        patient_id = None
+        patient_info = None
+        try:
+            patient_info = DatabaseHelper.get_patient_info(user_id=user_id)
+            if patient_info:
+                patient_id = patient_info.get('patient_id')
+        except Exception as e:
+            logging.debug(f"Could not get patient info for RAG: {e}")
+        
+        # AWS INTELLIGENCE STEP 1: Analyze query with AWS services (only for complex queries)
+        query_analysis = self.aws_intelligence.analyze_query_intent(user_message)
+        medical_entities = self.aws_intelligence.extract_medical_entities(user_message)
+        sentiment = self.aws_intelligence.detect_sentiment(user_message)
+        key_phrases = self.aws_intelligence.detect_key_phrases(user_message)
+        
+        # RAG STEP 1: Retrieve relevant context from database (only for complex queries)
+        retrieved_context = self.rag_retriever.retrieve_context(
+            query=user_message,
+            user_id=user_id,
+            patient_id=patient_id
+        )
+        
+        # Format context for LLM
+        context_string = self.rag_retriever.format_context_for_llm(retrieved_context)
+        
+        # Get detected intent and entities for context
+        intent = tracker.latest_message.get("intent", {}).get("name", "")
+        entities = tracker.latest_message.get("entities", [])
+        
+        # Get patient info if available for personalized responses (with timeout protection)
+        patient_info = None
+        appointments = None
+        try:
+            user_id = tracker.get_slot("user_id")
+            if user_id:
+                # Quick timeout for patient info
+                import signal
+                def timeout_handler(signum, frame):
+                    raise TimeoutError("Patient info query timed out")
+                
+                # Try to get patient info but don't block if it's slow
+                try:
+                    patient_info = DatabaseHelper.get_patient_info(user_id=user_id)
+                    if patient_info:
+                        appointments = DatabaseHelper.get_appointments(patient_id=patient_info.get('patient_id'))
+                except Exception as e:
+                    logging.debug(f"Could not fetch patient info (non-critical): {e}")
+                    patient_info = None
+                    appointments = None
+        except Exception as e:
+            logging.debug(f"Error getting patient context (non-critical): {e}")
+            # Continue without patient info - don't block
+        
+        # RAG STEP 2: Build enhanced message with RAG-retrieved context
+        # This is the core of RAG - augmenting the prompt with retrieved data
+        enhanced_message = f"""User Query: {user_message}
+
+RETRIEVED CONTEXT FROM DATABASE (RAG):
+{context_string}
+
+Please provide a comprehensive, intelligent response based on the retrieved context above. Use the specific information (doctors, insurance plans, appointments, patient info, medications, lab results) to give accurate, helpful answers. If the context contains relevant information, reference it specifically. If not, provide general helpful guidance."""
+        
+        # Add intent/entity info
+        context_info = []
+        if intent and intent != "nlu_fallback":
+            context_info.append(f"Intent: {intent}")
+        if entities:
+            entity_info = ", ".join([f"{e.get('entity')}: {e.get('value')}" for e in entities])
+            context_info.append(f"Entities: {entity_info}")
+        
+        if context_info:
+            enhanced_message += f"\n\n[Detected: {', '.join(context_info)}]"
+        
+        # Get conversation history from tracker (for conversational context - back and forth)
+        conversation_history = []
+        for event in tracker.events[-10:]:  # Last 10 events for better conversation context
+            if event.get("event") == "user":
+                conversation_history.append({
+                    "role": "user",
+                    "content": event.get("text", "")
+                })
+            elif event.get("event") == "bot":
+                conversation_history.append({
+                    "role": "assistant",
+                    "content": event.get("text", "")
+                })
+        
+        # AWS INTELLIGENCE STEP 2: Generate super intelligent conversational response
+        # (Simple queries already handled above, so this is only for complex queries)
+        response = None
+        
+        # COMPLEX QUERIES: Use AWS Intelligence with timeout protection
+        try:
+            # Use AWS Intelligence Services for complex queries (super intelligent)
+            response = self.aws_intelligence.generate_conversational_response(
+                user_message=user_message,
+                context=retrieved_context,
+                conversation_history=conversation_history,
+                medical_entities=medical_entities,
+                sentiment=sentiment
+            )
+            
+            # If AWS Intelligence succeeds, use it
+            if response and response.strip():
+                # Save and return intelligent response
+                pass
+            else:
+                raise Exception("AWS Intelligence returned empty response")
+                
+        except Exception as e:
+            logging.debug(f"AWS Intelligence failed, using intelligent fallback: {e}")
+            # Fallback to intelligent response generation with database context
+            if not response:
+                msg_lower = user_message.lower()
+                
+                # Check for general physician requests first
+                if any(word in msg_lower for word in ["general physician", "general practitioner", "GP", "family doctor", "primary care", "general doctor"]):
+                    specialty = "general medicine"
+                    doctors = None
+                    try:
+                        doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                    except Exception as e:
+                        logging.debug(f"Could not fetch doctors: {e}")
+                    
+                    if doctors and len(doctors) > 0:
+                        response = f"I found {len(doctors)} general physician(s) available:\n\n"
+                        for i, doc in enumerate(doctors[:5], 1):
+                            response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                            response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                            response += f"   Department: {doc.get('department', 'General Medicine')}\n"
+                            if doc.get('phone'):
+                                response += f"   Phone: {doc.get('phone')}\n"
+                            response += "\n"
+                        response += "Would you like to book an appointment with any of these general physicians?"
+                    else:
+                        response = "I can help you find a general physician! I can search our database for available general practitioners, show you their contact information, and help you book an appointment. Would you like me to search for available general physicians now?"
+                
+                # Check for symptoms first - suggest appropriate doctor
+                elif any(word in msg_lower for word in ["fever", "cold", "cough", "suffering", "symptom", "sick", "pain"]):
+                    # Map symptoms to appropriate specialty
+                    specialty = None
+                    if "fever" in msg_lower or "cold" in msg_lower or "cough" in msg_lower:
+                        specialty = "general medicine"  # General physician for common symptoms
+                    elif "blood pressure" in msg_lower or "high-blood" in msg_lower or "hypertension" in msg_lower:
+                        specialty = "cardiology"
+                    elif "sugar" in msg_lower or "diabetes" in msg_lower or "glucose" in msg_lower:
+                        specialty = "endocrinology"
+                    elif "headache" in msg_lower or "migraine" in msg_lower:
+                        specialty = "neurology"
+                    elif "skin" in msg_lower or "rash" in msg_lower:
+                        specialty = "dermatology"
+                    
+                    # Try to get doctors for the suggested specialty
+                    doctors = None
+                    if specialty:
+                        try:
+                            doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                        except Exception as e:
+                            logging.debug(f"Could not fetch doctors: {e}")
+                    
+                    if doctors and len(doctors) > 0:
+                        specialty_name = "general physician" if specialty == "general medicine" else specialty.replace('_', ' ').title()
+                        response = f"Based on your symptoms, I recommend seeing a {specialty_name}. Here are available doctors:\n\n"
+                        for i, doc in enumerate(doctors[:3], 1):
+                            response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                            response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                            if doc.get('phone'):
+                                response += f"   Phone: {doc.get('phone')}\n"
+                            response += "\n"
+                        response += "Would you like to book an appointment with any of these doctors?"
+                    else:
+                        # Fallback if no doctors found
+                        if "fever" in msg_lower or "cold" in msg_lower or "cough" in msg_lower:
+                            response = "I understand you're experiencing fever, cold, and cough. I recommend seeing a general physician. I can help you find available doctors and book an appointment. Would you like me to search for available doctors?"
+                        elif "blood pressure" in msg_lower or "high-blood" in msg_lower:
+                            response = "For high blood pressure concerns, I recommend seeing a cardiologist. I can help you find available cardiologists and book an appointment. Would you like me to search for cardiologists?"
+                        elif "sugar" in msg_lower or "diabetes" in msg_lower:
+                            response = "For high blood sugar concerns, I recommend seeing an endocrinologist. I can help you find available endocrinologists and book an appointment. Would you like me to search for endocrinologists?"
+                        else:
+                            response = "I understand you have health concerns. I can help you find the right doctor based on your symptoms and book an appointment. Would you like me to search for available doctors?"
+                
+                elif any(word in msg_lower for word in ["insurance", "plan", "coverage"]):
+                    # Use intelligent fallback with context
+                    response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+                elif any(word in msg_lower for word in ["appointment", "book", "schedule"]):
+                    # Check if specialty is mentioned in appointment request
+                    specialty = None
+                    if "cardiologist" in msg_lower or "cardiac" in msg_lower:
+                        specialty = "cardiology"
+                    elif "gynecologist" in msg_lower or "gynec" in msg_lower:
+                        specialty = "gynecology"
+                    elif "neurologist" in msg_lower:
+                        specialty = "neurology"
+                    elif "dermatologist" in msg_lower:
+                        specialty = "dermatology"
+                    elif "pediatrician" in msg_lower:
+                        specialty = "pediatrics"
+                    
+                    if specialty:
+                        # Get doctors for the requested specialty
+                        doctors = None
+                        try:
+                            doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                        except Exception as e:
+                            logging.debug(f"Could not fetch doctors: {e}")
+                        
+                        if doctors and len(doctors) > 0:
+                            specialty_name = specialty.replace('_', ' ').title()
+                            response = f"Great! I can help you book an appointment with a {specialty_name}. Here are available {specialty_name}s:\n\n"
+                            for i, doc in enumerate(doctors[:3], 1):
+                                response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                                response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                                if doc.get('phone'):
+                                    response += f"   Phone: {doc.get('phone')}\n"
+                                response += "\n"
+                            response += "Which doctor would you like to book an appointment with? Please provide the doctor's name or number, and I'll help you schedule."
+                        else:
+                            response = f"I can help you book an appointment with a {specialty.replace('_', ' ').title()}! Let me search for available doctors. Would you like me to find available {specialty.replace('_', ' ').title()}s for you?"
+                    else:
+                        # Use intelligent fallback with context
+                        response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+                elif any(word in msg_lower for word in ["show", "all", "list", "available"]) and "doctor" in msg_lower:
+                    # User wants to see all doctors - get all doctors from database
+                    doctors = None
+                    try:
+                        doctors = DatabaseHelper.get_doctors()  # No specialty filter = all doctors
+                    except Exception as e:
+                        logging.debug(f"Could not fetch doctors: {e}")
+                    
+                    # Fallback to API if database doesn't have doctors
+                    if not doctors or len(doctors) == 0:
+                        try:
+                            response_api = requests.get(f"{REACT_APP_DUMMY_API}/doctors/all", timeout=5)
+                            response_api.raise_for_status()
+                            api_doctors = response_api.json()
+                            if api_doctors:
+                                doctors = [{
+                                    'name': d.get('name', 'N/A'),
+                                    'specialty': d.get('specialty', 'General Medicine'),
+                                    'department': d.get('department', d.get('specialty', 'General Medicine')),
+                                    'phone': d.get('phone', 'N/A'),
+                                    'email': d.get('email', 'N/A')
+                                } for d in api_doctors[:10]]
+                        except requests.exceptions.RequestException as e:
+                            logging.debug(f"API call failed: {e}")
+                    
+                    if doctors and len(doctors) > 0:
+                        response = f" **All Available Doctors ({len(doctors)}):**\n\n"
+                        for i, doc in enumerate(doctors[:10], 1):  # Show first 10
+                            response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                            response += f"    Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                            response += f"    Department: {doc.get('department', 'N/A')}\n"
+                            if doc.get('phone') and doc.get('phone') != 'N/A':
+                                response += f"    Phone: {doc.get('phone')}\n"
+                            response += "\n"
+                        response += " **Next Steps:**\n"
+                        response += "• Would you like to book an appointment with any of these doctors?\n"
+                        response += "• I can help you find a specific specialist\n"
+                        response += "• I can assist with scheduling\n\n"
+                        response += "Which doctor would you like to book an appointment with?"
+                    else:
+                        response = "I'm searching for available doctors. Let me check our database and get back to you with available options. In the meantime, you can also call our appointment line at (555) 123-4567 or visit our website to see all available doctors."
+                elif any(word in msg_lower for word in ["find", "doctor", "gynecologist", "gynec", "obstetric", "specialist", "cardiologist", "neurologist", "dermatologist", "pediatrician", "orthopedic", "psychiatrist", "general physician", "general practitioner", "GP", "family doctor"]):
+                    # Handle doctor finding queries - get actual doctors from database
+                    specialty = None
+                    if "general physician" in msg_lower or "general practitioner" in msg_lower or "GP" in msg_lower or "family doctor" in msg_lower or "primary care" in msg_lower:
+                        specialty = "general medicine"
+                    elif "gynecologist" in msg_lower or "gynec" in msg_lower or "obstetric" in msg_lower:
+                        specialty = "gynecology"
+                    elif "cardiologist" in msg_lower or "cardiac" in msg_lower:
+                        specialty = "cardiology"
+                    elif "neurologist" in msg_lower or "neurology" in msg_lower:
+                        specialty = "neurology"
+                    elif "dermatologist" in msg_lower or "dermatology" in msg_lower:
+                        specialty = "dermatology"
+                    elif "pediatrician" in msg_lower or "pediatric" in msg_lower:
+                        specialty = "pediatrics"
+                    elif "orthopedic" in msg_lower or "orthoped" in msg_lower:
+                        specialty = "orthopedics"
+                    elif "psychiatrist" in msg_lower or "psychiatry" in msg_lower:
+                        specialty = "psychiatry"
+                    
+                    # Try to get doctors from database
+                    doctors = None
+                    try:
+                        doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                    except Exception as e:
+                        logging.debug(f"Could not fetch doctors from database: {e}")
+                    
+                    if doctors and len(doctors) > 0:
+                        # Build detailed response with actual doctors
+                        response = f"I found {len(doctors)} {'gynecologist' if specialty == 'gynecology' else specialty if specialty else 'doctor'}(s) available:\n\n"
+                        for i, doc in enumerate(doctors[:5], 1):  # Show first 5
+                            response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                            response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                            response += f"   Department: {doc.get('department', 'N/A')}\n"
+                            if doc.get('phone'):
+                                response += f"   Phone: {doc.get('phone')}\n"
+                            response += "\n"
+                        response += "Would you like to book an appointment with any of these doctors? I can help you schedule a visit!"
+                    else:
+                        # Fallback response if no doctors found - provide helpful guidance
+                        specialty_name = "gynecologist" if specialty == "gynecology" else (specialty.replace('_', ' ').title() if specialty else "doctor")
+                        response = f"I understand you're looking for a {specialty_name}. I can help you find one! I can search our database for available {specialty_name}s, show you their specialties and contact information, and help you book an appointment. Would you like me to search for available {specialty_name}s now, or would you prefer to see all available doctors? You can also call our appointment line at (555) 123-4567 for immediate assistance."
+                else:
+                    # Use intelligent fallback with context (always provides response)
+                    response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+        
+        # Ensure we have a response - use intelligent fallback with context for ALL queries
+        if not response or response.strip() == "":
+            # Use intelligent fallback that handles ALL query types with context
+            response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+            
+            # Enhance with retrieved context if available
+            if retrieved_context:
+                if retrieved_context.get('doctors'):
+                    doctors = retrieved_context['doctors']
+                    if doctors and len(doctors) > 0:
+                        response += f"\n\nI found {len(doctors)} relevant doctor(s) in our system:\n"
+                        for i, doc in enumerate(doctors[:3], 1):
+                            response += f"{i}. Dr. {doc.get('name', 'N/A')} - {doc.get('specialty', 'General Medicine')}\n"
+                        response += "\nWould you like to book an appointment with any of these doctors?"
+                
+                if retrieved_context.get('insurance_plans'):
+                    plans = retrieved_context['insurance_plans']
+                    if plans and len(plans) > 0:
+                        response += f"\n\nI found {len(plans)} insurance plan(s) available. Would you like to see details?"
+                
+                if retrieved_context.get('appointments'):
+                    appointments_list = retrieved_context['appointments']
+                    if appointments_list and len(appointments_list) > 0:
+                        response += f"\n\nYou have {len(appointments_list)} upcoming appointment(s). Would you like to manage them?"
+        
+        # Save conversation history to database (non-blocking, don't wait)
+        # Do this asynchronously - don't block the response
+        try:
+            # Just try to save, don't wait for it
+            DatabaseHelper.save_conversation_history(
+                sender_id, user_message, response,
+                intent=intent,
+                entities=entities
+            )
+        except Exception:
+            pass  # Ignore errors - non-critical
+        
+        dispatcher.utter_message(text=response)
+        
+        return []
+
+
+class ActionDescribeProblem(Action):
+    
+    def __init__(self):
+        self.bedrock_helper = AWSBedrockHelper()
+    
+    def name(self) -> Text:
+        return "action_describe_problem"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+
+        symptom = next(tracker.get_latest_entity_values("symptom"), None)
+
+        # Fetch data from API
+        try:
+            response = requests.get(f"{REACT_APP_DUMMY_API}/doctors/uniqueSpecialties/get")
+            response.raise_for_status()  # Raise an error for HTTP errors
+            data = response.json()
+            specialties = data.get("specialties", [])
+        except requests.exceptions.RequestException as e:
+            dispatcher.utter_message(text=f"Error fetching specialties: {str(e)}")
+            return []
+
+        if specialties and symptom:
+            specialties_text = ", ".join(specialties[:-1]) + f" and {specialties[-1]}" if len(specialties) > 1 else specialties[0]
+            response = self.bedrock_helper.get_response(f"Doctors we have {specialties_text} based on the symptom: {symptom} please select one type of doctor based on the symptom want output in one word.")
+            
+            dispatcher.utter_message(text=f"Based on your symptoms, I'll connect you with an {response} who focuses on {symptom} issues.")
+        else:
+            dispatcher.utter_message(text="No specialties available at the moment.")
+
+        return []
+
+class SubmitAppointment(Action):
+    def name(self) -> Text:
+        return "action_submit_appointment"
+
+    def run(self, dispatcher: CollectingDispatcher, tracker: Tracker, domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        user_id = tracker.get_slot("user_id")
+        date = tracker.get_slot("date")
+        time = tracker.get_slot("time")
+
+        if not all([user_id,  date, time]):
+            dispatcher.utter_message(text="Some details are missing. Please provide all required information.")
+            return []
+
+        payload = {
+            "userId": "67d01bc7dbd3b74510734fea",
+            "doctorId": user_id,
+            "date": date,
+            "time": time
+        }
+        
+        print(payload )
+        
+        response = requests.post(f"{REACT_APP_DUMMY_API}/appointments/add", json=payload)
+
+        if response.status_code == 201:
+            dispatcher.utter_message(text=f"Your appointment has been booked successfully on {date} at {time}.")
+        else:
+            dispatcher.utter_message(text="Failed to book your appointment. Please try again.")
+            
+        return [
+            SlotSet("user_id", None),
+            SlotSet("date", None),
+            SlotSet("time", None)
+        ]    
+           
+# class SubmitRescheduleAppointment(Action):
+#     def name(self) -> Text:
+#         return "action_submit_reschedule_appointment"
+
+#     def run(self, dispatcher: CollectingDispatcher, tracker: Tracker, domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+#         appointment_id = tracker.get_slot("appointment_id")
+#         date = tracker.get_slot("date")
+#         time = tracker.get_slot("time")
+        
+#         print(f"inside action_submit_reschedule_appointment {appointment_id}, {date}, {time}")
+
+#         if not all([appointment_id,  date, time]):
+#             dispatcher.utter_message(text="Some details are missing. Please provide all required information.")
+#             return []
+
+#         payload = {
+#             "date": date,
+#             "time": time
+#         }
+        
+        
+        
+#         response = requests.put(f"{REACT_APP_DUMMY_API}appointments/edit/{appointment_id}", json=payload)
+
+#         if response.status_code == 200:
+#             dispatcher.utter_message(text=f"Your appointment has been successfully reschedule on {date} at {time}.")
+#         else:
+#             dispatcher.utter_message(text="Failed to book your appointment. Please try again.")
+            
+#         return [
+#             SlotSet("appointment_id", None),
+#             SlotSet("date", None),
+#             SlotSet("time", None)
+#         ]
+
+
+# from rasa_sdk import Action, Tracker, FormValidationAction
+# from rasa_sdk.executor import CollectingDispatcher
+# from rasa_sdk.events import SlotSet, Form, EventType
+# import logging
+# from typing import Any, Text, Dict, List
+# from rasa_sdk.types import DomainDict
+# import random
+# from twilio.rest import Client
+# import re
+
+# # import psycopg2
+# # import json
+
+# import psycopg2
+# import psycopg2.pool
+# import json
+
+# # Database connection details
+# DB_NAME = "hospital"
+# DB_USER = "postgres"
+# DB_PASSWORD = "qMI8DUYcGnoTBpsyagh9"
+# DB_HOST = "hospital.cv8wum284gev.us-east-1.rds.amazonaws.com"  # Change to your DB server IP if remote
+# DB_PORT = "5432"  # Default PostgreSQL port
+
+
+# db_pool = psycopg2.pool.SimpleConnectionPool(
+#     minconn=1,
+#     maxconn=10,
+#     dbname=DB_NAME,
+#     user=DB_USER,
+#     password=DB_PASSWORD,
+#     host=DB_HOST,
+#     port=DB_PORT
+# )
+
+# otp_store = {}
+
+# TWILIO_ACCOUNT_SID = "AC4f7"
+# TWILIO_AUTH_TOKEN = "a5e"
+# TWILIO_PHONE_NUMBER = "+16166361988"
+
+# class ActionSubmitAppointment(Action):
+#     def name(self) -> str:
+#         return "action_submit_appointment"
+
+#     def run(self, dispatcher: CollectingDispatcher, tracker: Tracker, domain: dict) -> list:
+#         # Collect slot values
+#         print(f"Tracker slots: {tracker.slots}")
+#         symptom = tracker.get_slot("symptom")
+#         doctor_type = tracker.get_slot("doctor_type")
+#         preferred_date_time = tracker.get_slot("preferred_date_time")
+#         name = tracker.get_slot("name")
+#         age = tracker.get_slot("age")
+#         gender = tracker.get_slot("gender")
+#         contact_number = tracker.get_slot("contact_number")
+
+#         # Ensure all slots are filled
+#         if not all([symptom, doctor_type, preferred_date_time, name, age, gender, contact_number]):
+#             dispatcher.utter_message(text="It seems some details are missing. Please provide all the required information.")
+#             return []
+
+#         # Confirm the booking
+#         confirmation_message = (
+#             f"Your appointment has been booked successfully!\n"
+#             f"Details:\n"
+#             f"- Name: {name}\n"
+#             f"- Age: {age}\n"
+#             f"- Gender: {gender}\n"
+#             f"- Symptoms: {symptom}\n"
+#             f"- Doctor Type: {doctor_type}\n"
+#             f"- Preferred Date: {preferred_date_time}\n"
+#             f"- Contact Number: {contact_number}"
+#         )
+#         dispatcher.utter_message(text=confirmation_message)
+#         return []
+    
+
+
+# def validate_slot_value(slot_name, slot_value):
+#     # Define validation logic for different slots
+#     if slot_name == "contact_number":
+#         # Validate contact number (example: check if it's a 10-digit number)
+#         if re.match(r'^\d{10}$', slot_value):
+#             return True
+#         else:
+#             return False
+#     elif slot_name == "age":
+#         # Validate age (example: check if it's a number and within a reasonable range)
+#         print('######## Here')
+#         slot_value = int(slot_value)
+#         if isinstance(slot_value, (int, float)) and 0 < slot_value < 120:
+#             return True
+#         else:
+#             return False
+#     elif slot_name == "symptom":
+#         # Validate symptom (example: ensure it's not empty)
+#         if slot_value and isinstance(slot_value, str):
+#             return True
+#         else:
+#             return False
+#     # Add more slot validations as needed
+#     return False
+
+
+# def send_otp(contact_number: str) -> bool:
+#     """Sends an OTP to the provided contact number and returns True if successful, else False."""
+#     if not contact_number:
+#         print("No contact number provided.")
+#         return False
+
+#     # Generate a random 6-digit OTP
+#     otp = str(random.randint(100000, 999999))
+#     otp_store[contact_number] = otp  # Save the OTP for the contact number
+#     print(f"Generated OTP for {contact_number}: {otp}")  # For debugging; remove in production
+
+#     try:
+#         # Initialize the Twilio client
+#         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+#         # Send SMS
+#         message = client.messages.create(
+#             body=f"Your OTP is: {otp}. Please do not share this with anyone.",
+#             from_=TWILIO_PHONE_NUMBER,
+#             to=contact_number  # Ensure the contact number includes the country code
+#         )
+
+#         print(f"OTP sent successfully to {contact_number}. SID: {message.sid}")
+#         return True
+    
+#     except Exception as e:
+#         print(f"Failed to send OTP to {contact_number}: {e}")
+#         return False
+
+
+# # Custom action to validate any slot
+# class ActionValidateSlot(Action):
+#     def name(self) -> str:
+#         return "validate_appointment_form"
+
+#     def run(self, dispatcher: CollectingDispatcher, tracker: Tracker, domain: dict):
+#         # Get the filled slot name and value
+
+#         slots = ["contact_number", "age", "gender"]
+
+#         print(f"Tracker slots: {tracker.slots}")
+#         symptom = tracker.get_slot("symptom")
+#         doctor_type = tracker.get_slot("doctor_type")
+#         preferred_date_time = tracker.get_slot("preferred_date_time")
+#         name = tracker.get_slot("name")
+#         age = tracker.get_slot("age")
+#         gender = tracker.get_slot("gender")
+#         contact_number = tracker.get_slot("contact_number")
+#         provide_otp = tracker.get_slot("provide_otp")
+#         requested_slot = tracker.get_slot("requested_slot")
+
+#         #print("########Req slot", requested_slot)
+#         otp_store[str(contact_number)] = 11222
+#         if contact_number and requested_slot == 'contact_number':
+#             slot_name = "contact_number"
+#             if validate_slot_value("contact_number", contact_number):
+#                 #is_sent =  send_otp("+91"+ str(contact_number))
+#                 is_sent = True
+                
+#                 if is_sent:
+#                     dispatcher.utter_message(text=f"An OTP has been sent to your mobile number {contact_number}. Please provide it to continue.")
+#                     return [SlotSet(slot_name, contact_number)]
+#                 else:
+#                     dispatcher.utter_message(text=f"There was an issue sending the OTP. Please try again later.")
+#                     return [SlotSet(slot_name, None)]
+#             else:
+#                 dispatcher.utter_message(text=f"Please provide a valid 10 digit mobile number without country to send the OTP.")
+#                 return [SlotSet(slot_name, None)]
+
+#         if provide_otp and contact_number:
+#             slot_name = "provide_otp"
+#             key = "+91"+contact_number
+#             print("################otp_store", otp_store, "key", key)
+#             if key in otp_store and str(otp_store[key]) == str(provide_otp) :
+#                 #dispatcher.utter_message(text=f"Your OTP has been successfully verified!")
+#                 return [SlotSet("verified_otp", True)]
+
+#             else:
+#                 dispatcher.utter_message(text=f"The OTP you provided is incorrect. Please provide correct OTP.")
+#                 return [SlotSet(slot_name, None)]
+
+        
+#         if age:
+#             slot_name = "age"
+#             print("##########", validate_slot_value("age", age))
+#             if validate_slot_value("age", age):
+#                 return [SlotSet(slot_name, age)]
+
+#             else:
+#                 dispatcher.utter_message(text=f"Invalid age details.")
+#                 return [SlotSet(slot_name, None)]
+                
+
+        
+
+#         # # Call the validation function
+#         # if validate_slot_value(slot_name, slot_value):
+#         #     # If valid, return a success message
+#         #     dispatcher.utter_message(text=f"The value for {slot_name} is valid.")
+#         #     return [SlotSet(slot_name, slot_value)]
+#         # else:
+#         #     # If not valid, ask the user to re-enter the value
+#         #     dispatcher.utter_message(text=f"The value for {slot_name} is invalid. Please enter a valid {slot_name}.")
+#         #     return [SlotSet(slot_name, None)]  # Reset the invalid slot to allow the user to re-enter
+
+#         #return [SlotSet(slot_name, slot_value)]
+
+
+# class ActionAskPreferredDateTime(Action):
+#     def name(self):
+#         return "action_ask_preferred_date_time"
+
+#     def run(self, dispatcher, tracker, domain):
+#         # Fetch available date-time options from the backend
+#         try:
+#             message = "On which date would you like to book an appointment? Here are some available options:"
+#             slot_lst = fetch_from_db("select name, experience, doc_type, date, start_time, end_time from doctors d inner join  availability_slots a on d.doctor_id = a.doctor_id where a.doctor_id =1;")
+
+#         except Exception as e:
+#             dispatcher.utter_message(text="Sorry, I couldn't fetch the available date and time slots at the moment.")
+#             suggested_times = []
+
+#         # Send the message to the user with the options array
+#         dispatcher.utter_message(text=message, json_message={"type": "slot_card", "buttons": slot_lst})
+#         return []
+
+
+# def fetch_from_db(query):
+#     conn = None
+#     try:
+#         conn = db_pool.getconn()
+#         cursor = conn.cursor()
+#         cursor.execute(query)
+#         column_names = [desc[0] for desc in cursor.description]
+#         rows = cursor.fetchall()
+        
+#         # Convert Decimal and other non-serializable types
+#         result_list = [dict(zip(column_names, map(str, row))) for row in rows]
+        
+#         cursor.close()
+#         db_pool.putconn(conn)
+#         return result_list  # Return as Python object, not JSON string
+#     except Exception as e:
+#         if conn:
+#             db_pool.putconn(conn)
+#         return {"error": str(e)}  # Return as a dictionary, not JSON string
+
+# class ActionAskDoctorType(Action):
+#     def name(self):
+#         return "action_ask_doctor_type"
+
+#     def run(self, dispatcher, tracker, domain):
+#         try:
+#             doctors_lst = fetch_from_db("SELECT * FROM doctors;")
+#             message = "Which type of doctor would you like to consult?"
+#         except Exception as e:
+#             dispatcher.utter_message(text="Sorry, I couldn't fetch the available doctors at the moment.")
+#             return []
+        
+#         # Pass `doctors_lst` as a Python dictionary
+#         dispatcher.utter_message(text=message, json_message={"type": "doc_card", "buttons": doctors_lst})
+#         return []
+
+
+
+# class ActionPredictDoctor(Action):
+#     def name(self):
+#         return "action_predict_doctor"
+
+#     def run(self, dispatcher, tracker, domain):
+#         symptom = tracker.get_slot("symptom_slot")
+#         doctor_mapping = {
+#             "severe headache": "Neurologist",
+#             "stomach pain": "Gastroenterologist",
+#             "fever": "General Physician",
+#             "fever and sore throat": "General Physician",
+#             "chest pain": "Cardiologist",
+#             "coughing": "Pulmonologist",
+#             "difficulty breathing": "Pulmonologist",
+#             "back pain": "Orthopedist",
+#             "knee pain": "Orthopedist",
+#             "vomiting": "Gastroenterologist",
+#             "dizziness": "Neurologist",
+#             "nauseous": "Gastroenterologist",
+#             "allergy symptoms": "Allergist",
+#         }
+        
+#         # Predict doctor based on symptom
+#         doctor = doctor_mapping.get(symptom.lower(), "General Physician")
+        
+#         # Respond with prediction
+#         dispatcher.utter_message(text=f"You should see a {doctor}.")
+        
+#         return []
+    
+# class ActionSendOTP(Action):
+#     def name(self) -> Text:
+#         return "action_send_otp"
+
+#     def run(self, dispatcher: CollectingDispatcher, tracker: Tracker, domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+#             contact_number = tracker.get_slot("contact_number")
+#             print("############## contact_number called", contact_number)
+#             if not contact_number:
+#                 dispatcher.utter_message(text="Please provide a valid contact number to send the OTP.")
+#                 return []
+            
+#             # Check if the contact number is numeric and exactly 10 digits
+#             if not contact_number.isdigit() or len(contact_number) != 10:
+#                 dispatcher.utter_message(text="Please provide a valid 10-digit contact number.")
+#                 return []
+
+#             # Generate a random 6-digit OTP
+#             otp = str(random.randint(100000, 999999))
+#             otp_store[contact_number] = otp  # Save the OTP for the contact number
+#             print(f"OTP for {contact_number}: {otp}")  # For debugging; remove in production
+
+#             try:
+#                 # Initialize the Twilio client
+#                 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+#                 # Send SMS
+#                 message = client.messages.create(
+#                     body=f"Your OTP is: {otp}. Please do not share this with anyone. validate",
+#                     from_=TWILIO_PHONE_NUMBER,
+#                     to=f"+919785948208"  # Ensure the contact number includes the country code
+#                 )
+
+#                 print(f"OTP sent successfully to {contact_number}. SID: {message.sid}")
+
+#                 dispatcher.utter_message(
+#                     text=f"An OTP has been sent to your number {contact_number}. Please provide it to continue."
+#                 )
+#             except Exception as e:
+#                 print(f"Failed to send OTP to {contact_number}: {e}")
+#                 dispatcher.utter_message(
+#                     text="There was an issue sending the OTP. Please try again later."
+#                 )
+
+#             return []
+
+
+
+# class ActionVerifyOtp(Action):
+#     def name(self):
+#         return "action_verify_otp"
+
+#     def run(self, dispatcher, tracker, domain):
+#         user_otp = tracker.get_slot("provide_otp")
+#         correct_otp = "1234"  # Replace with your logic to verify OTP
+        
+#         if user_otp == correct_otp:
+#             dispatcher.utter_message(text="OTP verified successfully.")
+#             return [SlotSet("provide_otp", "verified")]
+#         else:
+#             dispatcher.utter_message(text="Invalid OTP. Please try again.")
+#             return [SlotSet("provide_otp", None)]
+
+# class ActionResendOTP(Action):
+#     def name(self) -> Text:
+#         return "action_resend_otp"
+
+#     def run(self, dispatcher: CollectingDispatcher, tracker: Tracker, domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+#         contact_number = tracker.get_slot("contact_number")
+#         if not contact_number:
+#             dispatcher.utter_message(text="Please provide a valid contact number to resend the OTP.")
+#             return []
+
+#         # Resend the OTP
+#         otp = str(random.randint(100000, 999999))
+#         otp_store[contact_number] = otp  # Update the OTP for the contact number
+#         print(f"Resent OTP for {contact_number}: {otp}")  # For debugging; remove in production
+
+#         dispatcher.utter_message(
+#             text=f"A new OTP has been sent to your number {contact_number}. Please provide it to continue."
+#         )
+#         return []
+    
+class ActionDefaultFallback(Action):
+    """Default fallback action that uses AWS Bedrock for intelligent responses"""
+    
+    def __init__(self):
+        self.bedrock_helper = AWSBedrockHelper()
+    
+    def name(self) -> Text:
+        return "action_default_fallback"
+
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        # Get the last user message
+        user_message = tracker.latest_message.get("text", "")
+        
+        # Get detected intent for context
+        intent = tracker.latest_message.get("intent", {}).get("name", "")
+        entities = tracker.latest_message.get("entities", [])
+        
+        # Build enhanced message
+        enhanced_message = user_message if user_message else "I need help with a healthcare question."
+        if intent:
+            enhanced_message += f"\n[User intent: {intent}]"
+        if entities:
+            entity_info = ", ".join([f"{e.get('entity')}: {e.get('value')}" for e in entities])
+            enhanced_message += f"\n[Detected: {entity_info}]"
+        
+        # Build conversation history
+        conversation_history = []
+        for event in tracker.events[-10:]:
+            if event.get("event") == "user":
+                conversation_history.append({
+                    "role": "user",
+                    "content": event.get("text", "")
+                })
+            elif event.get("event") == "bot":
+                conversation_history.append({
+                    "role": "assistant",
+                    "content": event.get("text", "")
+                })
+        
+        # Use AWS Bedrock for intelligent response
+        response = self.bedrock_helper.get_response(enhanced_message, conversation_history)
+        
+        if not response or response.strip() == "":
+            # Provide helpful fallback based on user message
+            if "insurance" in user_message.lower():
+                response = "I can help with insurance! We offer various plans and can verify coverage. What would you like to know?"
+            elif "appointment" in user_message.lower():
+                response = "I can help you book appointments! I can find doctors and schedule visits. Would you like to proceed?"
+            elif "health" in user_message.lower() or "symptom" in user_message.lower():
+                response = "I can help with health questions! I can assist with symptom assessment, finding doctors, booking appointments, and more. What do you need?"
+            else:
+                response = "I'm here to help with all your healthcare needs - appointments, insurance, health questions, medications, and more. What would you like to know?"
+        
+        dispatcher.utter_message(text=response)
+        return []
+    
+    
+# class ActionRestartForm(Action):
+#     def name(self) -> Text:
+#         return "action_restart"
+
+#     def run(self, dispatcher: CollectingDispatcher, tracker: Tracker, domain: DomainDict) -> List[Dict[Text, Any]]:
+#         # Reset the slots
+#         slots_to_reset = [
+#             "symptom","contact_number" ,"doctor_type", "preferred_date_time", "name", "age", "gender"
+#         ]
+        
+#         # Reset each slot
+#         events = [SlotSet(slot, None) for slot in slots_to_reset]
+        
+#         # Restart the form
+#         events.append(Form("appointment_form"))
+        
+#         dispatcher.utter_message(text="Let's start over. Please provide your details again.")
+#         return events
+
+
+class ActionInsuranceInfo(Action):
+    def name(self) -> Text:
+        return "action_insurance_info"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        # Mock insurance information - in real implementation, fetch from database
+        insurance_info = {
+            "provider": "HealthCare Plus",
+            "policy_number": "HCP-2024-001",
+            "coverage_type": "Comprehensive",
+            "deductible": "$500",
+            "co_pay": "$25",
+            "expiry_date": "2024-12-31",
+            "benefits": [
+                "Primary care visits: 100% covered",
+                "Specialist visits: 80% covered", 
+                "Emergency room: 90% covered",
+                "Prescription drugs: 70% covered"
+            ]
+        }
+        
+        message = f"""Your Insurance Information:
+        
+Provider: {insurance_info['provider']}
+Policy Number: {insurance_info['policy_number']}
+Coverage Type: {insurance_info['coverage_type']}
+Deductible: {insurance_info['deductible']}
+Co-pay: {insurance_info['co_pay']}
+Expiry Date: {insurance_info['expiry_date']}
+
+Benefits:
+{chr(10).join([f"• {benefit}" for benefit in insurance_info['benefits']])}"""
+        
+        dispatcher.utter_message(text=message)
+        return []
+
+
+class ActionInsurancePlans(Action):
+    def name(self) -> Text:
+        return "action_insurance_plans"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        # Get insurance plans from database
+        insurance_plans = DatabaseHelper.get_insurance_plans()
+        
+        # Fallback to default plans if database doesn't have them
+        if not insurance_plans:
+            insurance_plans = [
+            {
+                "name": "Basic Health Plan",
+                "monthly_premium": "$150",
+                "deductible": "$1000",
+                "coverage": "80%",
+                "features": ["Primary care", "Emergency visits", "Basic prescriptions"]
+            },
+            {
+                "name": "Premium Health Plan", 
+                "monthly_premium": "$300",
+                "deductible": "$500",
+                "coverage": "90%",
+                "features": ["All basic features", "Specialist visits", "Mental health", "Dental & Vision"]
+            },
+            {
+                "name": "Family Health Plan",
+                "monthly_premium": "$450", 
+                "deductible": "$750",
+                "coverage": "85%",
+                "features": ["All premium features", "Family coverage", "Maternity care", "Pediatric care"]
+            }
+        ]
+        
+        # Build detailed message
+        message = " **Available Insurance Plans:**\n\n"
+        for i, plan in enumerate(insurance_plans, 1):
+            message += f"**{i}. {plan['name']}**\n"
+            message += f"    Monthly Premium: {plan['monthly_premium']}\n"
+            message += f"    Deductible: {plan['deductible']}\n"
+            message += f"    Coverage: {plan['coverage']}\n"
+            features = plan.get('features', [])
+            if isinstance(features, list):
+                message += f"    Features: {', '.join(features)}\n"
+            message += "\n"
+        
+        message += " **Next Steps:**\n"
+        message += "• Would you like detailed information about any specific plan?\n"
+        message += "• I can provide personalized recommendations based on your needs\n"
+        message += "• I can help you compare plans side-by-side\n"
+        message += "• I can assist with enrollment or questions about coverage\n\n"
+        message += "What would you like to know more about?"
+        
+        # Save conversation history
+        sender_id = tracker.sender_id
+        user_message = tracker.latest_message.get("text", "")
+        DatabaseHelper.save_conversation_history(
+            sender_id, user_message, message, 
+            intent=tracker.latest_message.get("intent", {}).get("name"),
+            entities=tracker.latest_message.get("entities", [])
+        )
+        
+        dispatcher.utter_message(text=message)
+        return []
+
+
+class ActionInsuranceSuggestions(Action):
+    def name(self) -> Text:
+        return "action_insurance_suggestions"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        # Mock suggestions based on user profile - in real implementation, use AI/ML
+        # Build as single message to avoid splitting
+        suggestions = "Based on your profile, here are my insurance recommendations:\n\n"
+        suggestions += " **Recommended Plan: Premium Health Plan**\n"
+        suggestions += "- Best for: Regular medical needs\n"
+        suggestions += "- Monthly Cost: $300\n"
+        suggestions += "- Why: Covers 90% of costs with low deductible\n\n"
+        suggestions += "💊 **Alternative: Basic Health Plan**\n"
+        suggestions += "- Best for: Budget-conscious users\n"
+        suggestions += "- Monthly Cost: $150\n"
+        suggestions += "- Why: Good coverage for essential services\n\n"
+        suggestions += " **Family Option: Family Health Plan**\n"
+        suggestions += "- Best for: Families with children\n"
+        suggestions += "- Monthly Cost: $450\n"
+        suggestions += "- Why: Comprehensive family coverage\n\n"
+        suggestions += " **Tips:**\n"
+        suggestions += "- Consider your monthly medical expenses\n"
+        suggestions += "- Check if your preferred doctors are in-network\n"
+        suggestions += "- Review prescription drug coverage\n"
+        suggestions += "- Look for wellness program benefits\n\n"
+        suggestions += "Would you like more details about any of these plans?"
+        
+        # Save conversation history
+        sender_id = tracker.sender_id
+        user_message = tracker.latest_message.get("text", "")
+        DatabaseHelper.save_conversation_history(
+            sender_id, user_message, suggestions,
+            intent=tracker.latest_message.get("intent", {}).get("name"),
+            entities=tracker.latest_message.get("entities", [])
+        )
+        
+        dispatcher.utter_message(text=suggestions)
+        return []
+
+
+class ActionDoctorsList(Action):
+    def name(self) -> Text:
+        return "action_doctors_list"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        # Get specialty from user message or entities
+        user_message = tracker.latest_message.get("text", "").lower()
+        specialty = None
+        
+        # Detect specialty from message
+        if "gynecologist" in user_message or "gynec" in user_message or "obstetric" in user_message:
+            specialty = "gynecology"
+        elif "cardiologist" in user_message or "cardiac" in user_message:
+            specialty = "cardiology"
+        elif "neurologist" in user_message or "neurology" in user_message:
+            specialty = "neurology"
+        elif "dermatologist" in user_message or "dermatology" in user_message:
+            specialty = "dermatology"
+        elif "pediatrician" in user_message or "pediatric" in user_message:
+            specialty = "pediatrics"
+        elif "orthopedic" in user_message or "orthoped" in user_message:
+            specialty = "orthopedics"
+        elif "psychiatrist" in user_message or "psychiatry" in user_message:
+            specialty = "psychiatry"
+        
+        # Try database first (faster and more reliable)
+        doctors = None
+        try:
+            doctors = DatabaseHelper.get_doctors(specialty=specialty)
+        except Exception as e:
+            logging.debug(f"Database query failed, trying API: {e}")
+        
+        # Fallback to API if database doesn't have doctors
+        if not doctors or len(doctors) == 0:
+            try:
+                response = requests.get(f"{REACT_APP_DUMMY_API}/doctors/all", timeout=5)
+                response.raise_for_status()
+                api_doctors = response.json()
+            
+                if api_doctors:
+                    # Filter by specialty if specified
+                    if specialty:
+                        api_doctors = [d for d in api_doctors if specialty.lower() in d.get('specialty', '').lower()]
+                    
+                    doctors = [{
+                        'name': d.get('name', 'N/A'),
+                        'specialty': d.get('specialty', 'General Medicine'),
+                        'department': d.get('department', d.get('specialty', 'General Medicine')),
+                        'phone': d.get('phone', 'N/A'),
+                        'email': d.get('email', 'N/A')
+                    } for d in api_doctors[:10]]
+            except requests.exceptions.RequestException as e:
+                logging.debug(f"API call failed: {e}")
+        
+        # Build response message
+        if doctors and len(doctors) > 0:
+            specialty_name = specialty.replace('_', ' ').title() if specialty else "doctor"
+            message = f" **Available {specialty_name.title()}s:**\n\n"
+            for i, doctor in enumerate(doctors[:5], 1):  # Show first 5
+                message += f"**{i}. Dr. {doctor.get('name', 'N/A')}**\n"
+                message += f"    Specialty: {doctor.get('specialty', 'General Medicine')}\n"
+                message += f"    Department: {doctor.get('department', 'N/A')}\n"
+                if doctor.get('phone') and doctor.get('phone') != 'N/A':
+                    message += f"    Phone: {doctor.get('phone')}\n"
+                if doctor.get('email') and doctor.get('email') != 'N/A':
+                    message += f"   📧 Email: {doctor.get('email')}\n"
+                message += "\n"
+            message += " **Next Steps:**\n"
+            message += "• Would you like to book an appointment with any of these doctors?\n"
+            message += "• I can help you check their availability\n"
+            message += "• I can assist with scheduling\n\n"
+            message += "Which doctor would you like to book an appointment with?"
+        else:
+            specialty_name = specialty.replace('_', ' ').title() if specialty else "doctor"
+            message = f"I'm searching for available {specialty_name}s. Let me check our database and get back to you with available options. In the meantime, you can also call our appointment line at (555) 123-4567 or visit our website to see all available doctors."
+        
+        # Save conversation history
+        sender_id = tracker.sender_id
+        DatabaseHelper.save_conversation_history(
+            sender_id, user_message, message,
+            intent=tracker.latest_message.get("intent", {}).get("name"),
+            entities=tracker.latest_message.get("entities", [])
+        )
+        
+        dispatcher.utter_message(text=message)
+        return []
+
+
+class ActionNearbyHospitals(Action):
+    def name(self) -> Text:
+        return "action_nearby_hospitals"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        # Mock nearby hospitals - in real implementation, use location services
+        hospitals = [
+            {
+                "name": "City General Hospital",
+                "address": "123 Main Street, Downtown",
+                "distance": "0.5 miles",
+                "rating": "4.8/5",
+                "services": ["Emergency", "Surgery", "Cardiology", "Pediatrics"],
+                "phone": "(555) 123-4567"
+            },
+            {
+                "name": "Metro Medical Center", 
+                "address": "456 Health Avenue, Midtown",
+                "distance": "1.2 miles",
+                "rating": "4.6/5",
+                "services": ["Emergency", "Orthopedics", "Neurology", "Oncology"],
+                "phone": "(555) 987-6543"
+            },
+            {
+                "name": "Community Health Clinic",
+                "address": "789 Care Boulevard, Uptown", 
+                "distance": "2.1 miles",
+                "rating": "4.4/5",
+                "services": ["Primary Care", "Dental", "Mental Health", "Physical Therapy"],
+                "phone": "(555) 456-7890"
+            }
+        ]
+        
+        message = " Nearby Hospitals:\n\n"
+        for i, hospital in enumerate(hospitals, 1):
+            message += f"{i}. {hospital['name']}\n"
+            message += f"   📍 Address: {hospital['address']}\n"
+            message += f"   📏 Distance: {hospital['distance']}\n"
+            message += f"   ⭐ Rating: {hospital['rating']}\n"
+            message += f"    Services: {', '.join(hospital['services'])}\n"
+            message += f"    Phone: {hospital['phone']}\n\n"
+        
+        message += " Tip: Call ahead to check availability and book appointments."
+        
+        dispatcher.utter_message(text=message)
+        return []
+
+
+class ActionWhatsAppReminder(Action):
+    def name(self) -> Text:
+        return "action_whatsapp_reminder"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        # Mock WhatsApp reminder - in real implementation, integrate with WhatsApp API
+        message = """ WhatsApp Reminder Setup:
+
+ I'll send you a WhatsApp reminder for your appointment!
+
+Reminder Schedule:
+- 24 hours before appointment
+- 2 hours before appointment  
+- 30 minutes before appointment
+
+ To enable WhatsApp reminders:
+1. Please provide your WhatsApp number
+2. Confirm you want to receive reminders
+3. I'll send you a test message
+
+ Note: WhatsApp reminders are currently in development. 
+For now, you can:
+- Set up email reminders
+- Use calendar notifications
+- Call our office for confirmations
+
+Would you like to set up email reminders instead?"""
+        
+        dispatcher.utter_message(text=message)
+        return []
+
+
+class ActionCountryServices(Action):
+    def name(self) -> Text:
+        return "action_country_services"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        # Get location from user input or slot
+        location = next(tracker.get_latest_entity_values("location"), None)
+        country = next(tracker.get_latest_entity_values("country"), None)
+        
+        user_location = location or country or "your area"
+        
+        # Country-specific services mapping
+        country_services = {
+            "usa": {
+                "name": "United States",
+                "services": [
+                    "Emergency Services: 911",
+                    "Health Insurance: Medicare/Medicaid",
+                    "Pharmacy: CVS, Walgreens, Rite Aid",
+                    "Telemedicine: Available 24/7",
+                    "Mental Health: Crisis hotline 988"
+                ],
+                "hospitals": "Major hospital chains available",
+                "insurance": "Multiple insurance providers"
+            },
+            "india": {
+                "name": "India", 
+                "services": [
+                    "Emergency Services: 108",
+                    "Health Insurance: Ayushman Bharat",
+                    "Pharmacy: Apollo, MedPlus, Netmeds",
+                    "Telemedicine: Practo, 1mg",
+                    "Mental Health: Vandrevala Foundation"
+                ],
+                "hospitals": "Apollo, Fortis, Max Healthcare",
+                "insurance": "Government and private insurance"
+            },
+            "uk": {
+                "name": "United Kingdom",
+                "services": [
+                    "Emergency Services: 999",
+                    "Health Insurance: NHS",
+                    "Pharmacy: Boots, Lloyds Pharmacy",
+                    "Telemedicine: NHS 111",
+                    "Mental Health: Samaritans"
+                ],
+                "hospitals": "NHS hospitals and private clinics",
+                "insurance": "NHS and private insurance"
+            },
+            "canada": {
+                "name": "Canada",
+                "services": [
+                    "Emergency Services: 911",
+                    "Health Insurance: Provincial health plans",
+                    "Pharmacy: Shoppers Drug Mart, Rexall",
+                    "Telemedicine: Maple, Teladoc",
+                    "Mental Health: Crisis helplines"
+                ],
+                "hospitals": "Public and private hospitals",
+                "insurance": "Provincial and private insurance"
+            }
+        }
+        
+        # Default services if country not found
+        default_services = {
+            "name": "International",
+            "services": [
+                "Emergency Services: Local emergency number",
+                "Health Insurance: Check local providers",
+                "Pharmacy: Local pharmacies available",
+                "Telemedicine: Online consultation services",
+                "Mental Health: Local crisis support"
+            ],
+            "hospitals": "Local hospitals and clinics",
+            "insurance": "Local insurance providers"
+        }
+        
+        # Determine country from location
+        country_key = "international"
+        if user_location:
+            location_lower = user_location.lower()
+            for key in country_services:
+                if key in location_lower or any(word in location_lower for word in country_services[key]["name"].lower().split()):
+                    country_key = key
+                    break
+        
+        services = country_services.get(country_key, default_services)
+        
+        message = f"""🌍 Services Available in {services['name']}:
+
+ **Healthcare Services:**
+{chr(10).join([f"• {service}" for service in services['services']])}
+
+ **Hospitals:** {services['hospitals']}
+**Insurance:** {services['insurance']}
+
+ **Tips:**
+• Emergency services are available 24/7
+• Check with your insurance provider for coverage
+• Telemedicine options are available for non-emergency consultations
+• Keep emergency numbers saved in your phone
+
+Would you like more specific information about any of these services?"""
+        
+        dispatcher.utter_message(text=message)
+        return []
+
+
+class ActionHealthPredictions(Action):
+    def name(self) -> Text:
+        return "action_health_predictions"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        # Mock health predictions based on user data - in real implementation, use ML models
+        predictions = {
+            "risk_factors": [
+                "Blood pressure trending upward",
+                "Sleep quality declining",
+                "Stress levels increasing"
+            ],
+            "recommendations": [
+                "Schedule regular check-ups",
+                "Improve sleep hygiene",
+                "Consider stress management techniques"
+            ],
+            "health_score": 78,
+            "trends": [
+                "Weight: Stable",
+                "Blood Sugar: Slightly elevated",
+                "Heart Rate: Normal range"
+            ]
+        }
+        
+        message = f"""🔮 **Your Personalized Health Predictions:**
+
+ **Health Score:** {predictions['health_score']}/100
+
+ **Risk Factors Identified:**
+{chr(10).join([f"• {factor}" for factor in predictions['risk_factors']])}
+
+📈 **Health Trends:**
+{chr(10).join([f"• {trend}" for trend in predictions['trends']])}
+
+ **AI Recommendations:**
+{chr(10).join([f"• {rec}" for rec in predictions['recommendations']])}
+
+ **Next Steps:**
+• Monitor your health metrics regularly
+• Follow up with your doctor about concerning trends
+• Implement lifestyle changes gradually
+• Track your progress over time
+
+*Note: These predictions are based on available data and should not replace professional medical advice.*"""
+        
+        dispatcher.utter_message(text=message)
+        return []
+
+
+class ActionHealthRecommendations(Action):
+    def name(self) -> Text:
+        return "action_health_recommendations"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        # Mock personalized recommendations - in real implementation, use user profile data
+        recommendations = {
+            "diet": [
+                "Increase fiber intake",
+                "Reduce sodium consumption",
+                "Add more leafy greens"
+            ],
+            "exercise": [
+                "30 minutes of cardio daily",
+                "Strength training 2x per week",
+                "Walking breaks every 2 hours"
+            ],
+            "lifestyle": [
+                "Improve sleep schedule",
+                "Practice stress management",
+                "Stay hydrated (8 glasses/day)"
+            ],
+            "monitoring": [
+                "Check blood pressure weekly",
+                "Track sleep patterns",
+                "Monitor stress levels"
+            ]
+        }
+        
+        message = f""" **Your Personalized Health Recommendations:**
+
+🥗 **Diet & Nutrition:**
+{chr(10).join([f"• {rec}" for rec in recommendations['diet']])}
+
+ **Exercise & Fitness:**
+{chr(10).join([f"• {rec}" for rec in recommendations['exercise']])}
+
+**Lifestyle Changes:**
+{chr(10).join([f"• {rec}" for rec in recommendations['lifestyle']])}
+
+ **Health Monitoring:**
+{chr(10).join([f"• {rec}" for rec in recommendations['monitoring']])}
+
+ **Smart Tips:**
+• Set realistic goals and track progress
+• Make one change at a time for better success
+• Celebrate small victories along the way
+• Consult your doctor before major changes
+
+ **Your Action Plan:**
+1. Start with the easiest recommendations
+2. Set weekly goals
+3. Track your progress
+4. Adjust based on results
+
+*Remember: These are general recommendations. Always consult with your healthcare provider for personalized medical advice.*"""
+        
+        dispatcher.utter_message(text=message)
+        return []
+
+
+class ActionPatientRegistration(Action):
+    def name(self) -> Text:
+        return "action_patient_registration"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        # Get patient information from slots
+        name = tracker.get_slot("name")
+        age = tracker.get_slot("age")
+        gender = tracker.get_slot("gender")
+        phone = tracker.get_slot("phone")
+        email = tracker.get_slot("email")
+        emergency_contact = tracker.get_slot("emergency_contact")
+        
+        if not all([name, age, gender, phone, email, emergency_contact]):
+            dispatcher.utter_message(text="Please provide all required information to complete registration.")
+            return []
+        
+        # Mock patient registration - in real implementation, save to database
+        patient_id = f"PAT_{hash(name + phone) % 100000:05d}"
+        
+        message = f""" **Registration Complete!**
+
+**Patient ID:** {patient_id}
+**Name:** {name}
+**Age:** {age}
+**Gender:** {gender}
+**Phone:** {phone}
+**Email:** {email}
+**Emergency Contact:** {emergency_contact}
+
+🎉 Welcome to our healthcare system! You can now:
+• Book appointments
+• Access your medical records
+• Get health recommendations
+• Receive medication reminders
+• Use all our healthcare services
+
+Your patient ID is: **{patient_id}** - Please save this for future reference."""
+        
+        dispatcher.utter_message(text=message)
+        return []
+
+
+class ActionEmergencyDetection(Action):
+    def name(self) -> Text:
+        return "action_emergency_detection"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        # Emergency keywords detection
+        emergency_keywords = [
+            "heart attack", "stroke", "chest pain", "difficulty breathing",
+            "severe bleeding", "unconscious", "seizure", "severe allergic reaction",
+            "suicide", "self harm", "overdose", "severe burn", "broken bone",
+            "severe headache", "vision loss", "paralysis", "severe abdominal pain"
+        ]
+        
+        user_message = tracker.latest_message.get("text", "").lower()
+        
+        is_emergency = any(keyword in user_message for keyword in emergency_keywords)
+        
+        if is_emergency:
+            message = """🚨 **EMERGENCY DETECTED!**
+
+**IMMEDIATE ACTION REQUIRED:**
+• Call 911 (Emergency Services) immediately
+• Go to the nearest emergency room
+• If you're alone, call someone for help
+
+**Emergency Numbers:**
+• 911 - Emergency Services
+• 988 - Suicide & Crisis Lifeline
+• Poison Control: 1-800-222-1222
+
+**While waiting for help:**
+• Stay calm and breathe slowly
+• Don't move if you suspect injury
+• Keep emergency contacts informed
+• Follow any first aid instructions given
+
+ **This is not a substitute for emergency medical care!**"""
+        else:
+            message = "I understand you're concerned. Let me help assess your symptoms to determine the best course of action."
+        
+        dispatcher.utter_message(text=message)
+        return []
+
+
+class ActionSymptomAssessment(Action):
+    def name(self) -> Text:
+        return "action_symptom_assessment"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        symptom = tracker.get_slot("symptom")
+        duration = tracker.get_slot("duration")
+        severity = tracker.get_slot("severity")
+        
+        # AI-powered symptom assessment
+        assessment = self.assess_symptoms(symptom, duration, severity)
+        
+        message = f""" **Symptom Assessment Results:**
+
+**Primary Symptom:** {symptom}
+**Duration:** {duration}
+**Severity:** {severity}/10
+
+**Assessment:** {assessment['diagnosis']}
+**Urgency Level:** {assessment['urgency']}
+**Recommendation:** {assessment['recommendation']}
+
+**Next Steps:**
+{chr(10).join([f"• {step}" for step in assessment['next_steps']])}
+
+**When to Seek Immediate Care:**
+{chr(10).join([f"• {warning}" for warning in assessment['warnings']])}
+
+*Note: This is a preliminary assessment. Always consult with a healthcare professional for proper diagnosis.*"""
+        
+        dispatcher.utter_message(text=message)
+        return []
+    
+    def assess_symptoms(self, symptom, duration, severity):
+        # Mock AI assessment - in real implementation, use ML models
+        if "chest pain" in symptom.lower():
+            return {
+                "diagnosis": "Possible cardiac issue",
+                "urgency": "HIGH",
+                "recommendation": "Seek immediate medical attention",
+                "next_steps": ["Call 911 if severe", "Go to ER if moderate", "See doctor within 24 hours"],
+                "warnings": ["Chest pain with shortness of breath", "Pain radiating to arm/jaw", "Nausea or sweating"]
+            }
+        elif "fever" in symptom.lower():
+            return {
+                "diagnosis": "Possible infection",
+                "urgency": "MEDIUM",
+                "recommendation": "Monitor and seek care if worsening",
+                "next_steps": ["Rest and stay hydrated", "Take temperature regularly", "See doctor if fever persists"],
+                "warnings": ["Fever above 103°F", "Difficulty breathing", "Severe headache"]
+            }
+        else:
+            return {
+                "diagnosis": "General symptoms",
+                "urgency": "LOW",
+                "recommendation": "Monitor symptoms and seek care if needed",
+                "next_steps": ["Rest and self-care", "Monitor for changes", "See doctor if symptoms worsen"],
+                "warnings": ["Symptoms worsen", "New symptoms appear", "No improvement in 3 days"]
+            }
+
+
+class ActionMedicationManagement(Action):
+    def name(self) -> Text:
+        return "action_medication_management"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        # Mock medication management
+        medications = [
+            {"name": "Lisinopril", "dosage": "10mg", "frequency": "Once daily", "next_dose": "8:00 AM"},
+            {"name": "Metformin", "dosage": "500mg", "frequency": "Twice daily", "next_dose": "12:00 PM"},
+            {"name": "Atorvastatin", "dosage": "20mg", "frequency": "Once daily", "next_dose": "8:00 PM"}
+        ]
+        
+        message = f"""💊 **Medication Management**
+
+**Current Medications:**
+{chr(10).join([f"• {med['name']} - {med['dosage']} ({med['frequency']}) - Next: {med['next_dose']}" for med in medications])}
+
+**Today's Schedule:**
+• 8:00 AM - Lisinopril 10mg
+• 12:00 PM - Metformin 500mg  
+• 8:00 PM - Atorvastatin 20mg
+
+**Reminders:**
+• Take with food if needed
+• Don't skip doses
+• Report any side effects
+• Keep medications in original containers
+
+**Refill Reminders:**
+• Lisinopril: 5 days remaining
+• Metformin: 10 days remaining
+• Atorvastatin: 15 days remaining
+
+Would you like to:
+• Set up medication reminders
+• Check for drug interactions
+• Request refills
+• Report side effects"""
+        
+        dispatcher.utter_message(text=message)
+        return []
+
+
+class ActionMentalHealthScreening(Action):
+    def name(self) -> Text:
+        return "action_mental_health_screening"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        # Mock mental health screening
+        screening_questions = [
+            "How would you rate your mood today? (1-10)",
+            "Have you been feeling anxious or worried lately?",
+            "How is your sleep quality?",
+            "Have you lost interest in activities you used to enjoy?",
+            "Do you feel hopeless or helpless?"
+        ]
+        
+        message = f"""🧠 **Mental Health Screening**
+
+**Quick Assessment Questions:**
+{chr(10).join([f"• {q}" for q in screening_questions])}
+
+**Mental Health Resources:**
+• **Crisis Hotline:** 988 (24/7)
+• **Text Support:** Text HOME to 741741
+• **Online Therapy:** BetterHelp, Talkspace
+• **Support Groups:** NAMI, Mental Health America
+
+**Self-Care Tips:**
+• Practice deep breathing
+• Maintain regular sleep schedule
+• Stay connected with loved ones
+• Exercise regularly
+• Limit alcohol and caffeine
+
+**Warning Signs to Watch:**
+• Persistent sadness or anxiety
+• Changes in sleep or appetite
+• Loss of interest in activities
+• Thoughts of self-harm
+• Difficulty concentrating
+
+**If you're in crisis:**
+• Call 988 immediately
+• Go to nearest emergency room
+• Contact a mental health professional
+
+Remember: It's okay to ask for help. Mental health is just as important as physical health."""
+        
+        dispatcher.utter_message(text=message)
+        return []
+
+
+class ActionHealthEducation(Action):
+    def name(self) -> Text:
+        return "action_health_education"
+    
+    def run(self, dispatcher: CollectingDispatcher,
+            tracker: Tracker,
+            domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
+        
+        # Mock health education content
+        education_topics = {
+            "prevention": [
+                "Wash hands frequently",
+                "Get regular exercise",
+                "Eat a balanced diet",
+                "Get adequate sleep",
+                "Manage stress"
+            ],
+            "screening": [
+                "Annual physical exams",
+                "Blood pressure monitoring",
+                "Cholesterol checks",
+                "Cancer screenings",
+                "Vision and dental exams"
+            ],
+            "lifestyle": [
+                "Quit smoking",
+                "Limit alcohol consumption",
+                "Stay hydrated",
+                "Practice safe sex",
+                "Wear sunscreen"
+            ]
+        }
+        
+        message = f"""📚 **Health Education & Wellness**
+
+**Prevention Tips:**
+{chr(10).join([f"• {tip}" for tip in education_topics['prevention']])}
+
+**Important Screenings:**
+{chr(10).join([f"• {screening}" for screening in education_topics['screening']])}
+
+**Healthy Lifestyle:**
+{chr(10).join([f"• {lifestyle}" for lifestyle in education_topics['lifestyle']])}
+
+**Health Topics:**
+• Heart Health
+• Diabetes Prevention
+• Mental Wellness
+• Nutrition Guidelines
+• Exercise Programs
+• Stress Management
+
+**Educational Resources:**
+• CDC Health Guidelines
+• WHO Health Information
+• Mayo Clinic Health Library
+• WebMD Health Topics
+• Healthline Articles
+
+Would you like information about any specific health topic?"""
+        
+        dispatcher.utter_message(text=message)
+        return []
+

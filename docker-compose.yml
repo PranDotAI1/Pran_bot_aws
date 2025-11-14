@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  rasa:
+    build:
+      context: ./backend/app
+      dockerfile: Dockerfile
+    container_name: pran-rasa-backend
+    ports:
+      - "5005:5005"
+    environment:
+      - ACTION_SERVER_URL=http://rasa-actions:5055/webhook
+      - RASA_SERVER_URL=http://rasa:5005
+      - SKIP_TRAINING=${SKIP_TRAINING:false}
+    volumes:
+      - ./backend/app/models:/app/models
+      - ./backend/app/data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - pran-network
+
+  rasa-actions:
+    build:
+      context: ./backend/app
+      dockerfile: Dockerfile.actions
+    container_name: pran-rasa-actions
+    ports:
+      - "5055:5055"
+    environment:
+      - AWS_REGION=${AWS_REGION:us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AURORA_ENDPOINT=${AURORA_ENDPOINT}
+      - DB_NAME=${DB_NAME:postgres}
+      - DB_USER=${DB_USER:postgres}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_PORT=${DB_PORT:5432}
+      - MONGODB_URI=${MONGODB_URI}
+      - BEDROCK_MODEL_ID=${BEDROCK_MODEL_ID:anthropic.claude-3-5-sonnet-20241022-v2:0}
+      - REACT_APP_DUMMY_API=${REACT_APP_DUMMY_API}
+    volumes:
+      - ./backend/app/actions:/app/actions
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5055/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - pran-network
+    depends_on:
+      - rasa
+
+  flask-wrapper:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend
+    container_name: pran-flask-wrapper
+    ports:
+      - "5001:5001"
+    environment:
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5001
+      - FLASK_DEBUG=${FLASK_DEBUG:false}
+      - RASA_WEBHOOK_URL=http://rasa:5005/webhooks/rest/webhook
+      - RASA_STATUS_URL=http://rasa:5005/status
+      - MONGODB_URI=${MONGODB_URI}
+    volumes:
+      - ./backend:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - pran-network
+    depends_on:
+      - rasa
+
+networks:
+  pran-network:
+    driver: bridge
+

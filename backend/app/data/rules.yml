@@ -1,0 +1,35 @@
+version: "3.1"
+
+rules:
+  - rule: Submit appointment form
+    condition:
+      - active_loop: appointment_form
+    steps:
+      - action: appointment_form
+      - active_loop: null
+      - action: action_submit_appointment
+
+  - rule: Use AWS Bedrock for general questions and all queries
+    steps:
+      - intent: aws_bedrock_chat
+      - action: action_aws_bedrock_chat
+
+  - rule: Show insurance plans when requested
+    steps:
+      - intent: request_insurance_plans
+      - action: action_insurance_plans
+
+  - rule: Show insurance info when requested
+    steps:
+      - intent: request_insurance_info
+      - action: action_insurance_info
+
+  - rule: Show insurance suggestions when requested
+    steps:
+      - intent: request_insurance_suggestions
+      - action: action_insurance_suggestions
+
+  - rule: Show doctors list when requested
+    steps:
+      - intent: request_doctors_list
+      - action: action_doctors_list

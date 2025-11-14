@@ -1,0 +1,32 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    postgresql-client \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY backend/requirements.txt /app/requirements.txt
+COPY backend/app/requirements.txt /app/app_requirements.txt
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir -r app_requirements.txt
+
+# Copy application code
+COPY backend/ /app/
+
+# Expose ports
+EXPOSE 5001 5005
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:5001/health || exit 1
+
+# Run Flask wrapper server
+CMD ["python", "wrapper_server.py"]
+
