@@ -1,0 +1,10 @@
+[
+  {
+    "text": "What is the official website to check matriculation results?",
+    "intent": "scrutiny_result",
+    "intent_prediction": {
+      "name": "annual_result",
+      "confidence": 0.8186531066894531
+    }
+  }
+]

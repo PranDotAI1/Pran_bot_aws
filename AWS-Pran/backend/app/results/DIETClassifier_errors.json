@@ -1,0 +1,44 @@
+[
+  {
+    "text": "Where can I apply for the 10th class application form?",
+    "entities": [
+      {
+        "start": 26,
+        "end": 30,
+        "value": "10th",
+        "entity": "exam_type"
+      }
+    ],
+    "predicted_entities": [
+      {
+        "entity": "exam_type",
+        "start": 26,
+        "end": 30,
+        "confidence_entity": 0.8866394026782412,
+        "value": "10th",
+        "extractor": "CRFEntityExtractor"
+      }
+    ]
+  },
+  {
+    "text": "Where can I apply for the 12th grade application form?",
+    "entities": [
+      {
+        "start": 26,
+        "end": 30,
+        "value": "12th",
+        "entity": "exam_type"
+      }
+    ],
+    "predicted_entities": [
+      {
+        "entity": "exam_type",
+        "start": 26,
+        "end": 30,
+        "confidence_entity": 0.7621166495099787,
+        "value": "12th",
+        "extractor": "CRFEntityExtractor"
+      }
+    ]
+  }
+]
