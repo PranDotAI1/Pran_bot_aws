@@ -107,24 +107,35 @@ temp/
 
 # OS
 .DS_Store
-Thumbs.db
-
-# Documentation builds
-docs/_build/
-*.docx
-
-# Test files
-test_results/
-results/
-*.png
-*.html
-story_graph.dot
-
-# Secrets and credentials
-secrets/
-credentials.yml
-!credentials.yml.template
-*.pem
-*.key
-*.crt
-
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.venv
+venv/
+rasa_env/
+backend/rasa_env/
+*.pyc
+__pycache__
+.pyc
+.env
+.pytest_cache/
+node_modules
+.rasa
+.rasa-nlu
+.rasa-core
+.rasa-nlu-data
+.rasa-core-data
+*.zip
+terraform
+terraform.zip
+.terraform/
+aws-deployment/terraform*/.terraform/
+pran_chatbot-main.zip
+*.dylib
+*.so
+*.tar.gz
+backend/app/models/*.tar.gz
+.rasa-nlu-data
+.rasa-core-data
