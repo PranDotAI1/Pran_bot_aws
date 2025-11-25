@@ -91,6 +91,10 @@ htmlcov/
 backend/app/models/*.tar.gz
 backend/app/models/*.pkl
 
+# Rasa cache files
+backend/app/.rasa/
+backend/app/.rasa/cache/
+
 # Database files
 *.db
 *.sqlite
