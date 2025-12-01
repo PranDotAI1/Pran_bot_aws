@@ -59,6 +59,18 @@ node_modules/
 *.tfstate
 *.tfstate.*
 .terraform.lock.hcl
+terraform/
+terraform
+
+# Virtual environments
+venv/
+env/
+ENV/
+rasa_env/
+.venv
+django_env/
+api_backend/django_env/
+backend/rasa_env/
 
 # Documentation duplicates (keep only README.md and docs/)
 # ALL_*.md
@@ -78,7 +90,15 @@ models/*.tar.gz
 # Rasa cache
 .rasa/
 backend/app/.rasa/
+**/.rasa/
 
 # Large binary files
-terraform
 *.zip
+
+# Deployment logs
+deployment_output.log
+*.log
+
+# AWS deployment
+aws-deployment/terraform/.terraform/
+aws-deployment/terraform-simple/.terraform/
