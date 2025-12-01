@@ -91,11 +91,12 @@ def update_task_definition(task_def_json, config=None):
             env_dict = {e['name']: e['value'] for e in env_vars}
             
             # Update or add environment variables
+            # Use container name for better reliability in ECS (both work, but container name is more explicit)
             updates = {
                 'FLASK_PORT': '5000',
                 'FLASK_HOST': '0.0.0.0',
-                'RASA_WEBHOOK_URL': 'http://localhost:5005/webhooks/rest/webhook',
-                'RASA_STATUS_URL': 'http://localhost:5005/status',
+                'RASA_WEBHOOK_URL': 'http://rasa-backend:5005/webhooks/rest/webhook',  # Use container name
+                'RASA_STATUS_URL': 'http://rasa-backend:5005/status',  # Use container name
                 'MONGODB_URI': mongodb_uri
             }
             

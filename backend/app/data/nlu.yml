@@ -3,6 +3,14 @@ version: "3.1"
 nlu:
   - intent: aws_bedrock_chat
     examples: |
+      - Hello
+      - Hi
+      - Hey
+      - Hi there
+      - Hello there
+      - Good morning
+      - Good afternoon
+      - Good evening
       - What are the symptoms of diabetes?
       - How can I treat a minor burn?
       - What is the best way to cure a headache?

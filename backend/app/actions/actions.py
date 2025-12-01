@@ -690,9 +690,41 @@ class AWSBedrockChat(Action):
     """Super intelligent RAG-powered chatbot with AWS services for conversational responses"""
     
     def __init__(self):
-        self.bedrock_helper = AWSBedrockHelper()
-        self.rag_retriever = RAGRetriever()
-        self.aws_intelligence = AWSIntelligenceServices()
+        # Lazy initialization - only create services when needed
+        # This allows simple queries to work even if AWS services fail
+        self.bedrock_helper = None
+        self.rag_retriever = None
+        self.aws_intelligence = None
+    
+    def _get_bedrock_helper(self):
+        """Lazy initialization of Bedrock helper"""
+        if self.bedrock_helper is None:
+            try:
+                self.bedrock_helper = AWSBedrockHelper()
+            except Exception as e:
+                logging.warning(f"Could not initialize Bedrock helper: {e}")
+                self.bedrock_helper = None
+        return self.bedrock_helper
+    
+    def _get_rag_retriever(self):
+        """Lazy initialization of RAG retriever"""
+        if self.rag_retriever is None:
+            try:
+                self.rag_retriever = RAGRetriever()
+            except Exception as e:
+                logging.warning(f"Could not initialize RAG retriever: {e}")
+                self.rag_retriever = None
+        return self.rag_retriever
+    
+    def _get_aws_intelligence(self):
+        """Lazy initialization of AWS Intelligence"""
+        if self.aws_intelligence is None:
+            try:
+                self.aws_intelligence = AWSIntelligenceServices()
+            except Exception as e:
+                logging.warning(f"Could not initialize AWS Intelligence: {e}")
+                self.aws_intelligence = None
+        return self.aws_intelligence
     
     def name(self) -> Text:
         return "action_aws_bedrock_chat"
@@ -706,26 +738,74 @@ class AWSBedrockChat(Action):
         sender_id = tracker.sender_id
         msg_lower = user_message.lower()
         
-        # ULTRA FAST PATH: Check for simple queries FIRST (before any processing)
+        # Get conversation history for intelligent responses
+        conversation_history = []
+        for event in tracker.events[-10:]:  # Last 10 events for conversation context
+            if event.get("event") == "user":
+                conversation_history.append({
+                    "role": "user",
+                    "content": event.get("text", "")
+                })
+            elif event.get("event") == "bot":
+                conversation_history.append({
+                    "role": "assistant",
+                    "content": event.get("text", "")
+                })
+        
+        # Try to use AWS Bedrock for intelligent conversational responses FIRST
+        # This enables super intelligent back-and-forth conversations
+        aws_intelligence = self._get_aws_intelligence()
+        bedrock_helper = self._get_bedrock_helper()
+        
+        # For ALL queries, try to use intelligent Bedrock response
+        intelligent_response = None
+        
+        if aws_intelligence:
+            try:
+                # Use AWS Intelligence for super intelligent conversational responses
+                # This works for ALL queries - greetings, questions, everything
+                intelligent_response = aws_intelligence.generate_conversational_response(
+                    user_message=user_message,
+                    context={},  # Will be populated below for complex queries
+                    conversation_history=conversation_history,
+                    medical_entities={},  # Will be populated below
+                    sentiment=None  # Will be populated below
+                )
+                
+                if intelligent_response and intelligent_response.strip():
+                    # We got an intelligent response! Use it.
+                    dispatcher.utter_message(text=intelligent_response)
+                    return []
+            except Exception as e:
+                logging.debug(f"AWS Intelligence conversational response failed: {e}")
+        
+        # Fallback: If Bedrock not available, use simple responses for greetings
         is_simple_query = any(word in msg_lower for word in [
             "hi", "hello", "hey", "good morning", "good afternoon", "good evening",
             "thanks", "thank you", "bye", "goodbye"
         ])
         
         if is_simple_query:
-            # Instant response for greetings - NO AWS, NO RAG, NO DATABASE
-            if any(word in msg_lower for word in ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]):
-                response = "Hello! I'm Dr. AI, your healthcare assistant. I'm here to help with all your healthcare needs - appointments, insurance, finding doctors, symptom assessment, and more. How can I help you today?"
-            elif any(word in msg_lower for word in ["thanks", "thank you"]):
-                response = "You're welcome! I'm here whenever you need help with your healthcare needs. Is there anything else I can assist you with?"
-            elif any(word in msg_lower for word in ["bye", "goodbye"]):
-                response = "Goodbye! Take care of your health. Feel free to come back anytime you need assistance!"
-            else:
-                response = "Hello! How can I help you today?"
-            
-            # Return immediately - no further processing
-            dispatcher.utter_message(text=response)
-            return []
+            try:
+                # Simple response if Bedrock not available
+                if any(word in msg_lower for word in ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]):
+                    response = "Hello! I'm Dr. AI, your super intelligent healthcare assistant. I'm here to help with all your healthcare needs - appointments, insurance, finding doctors, symptom assessment, and more. How can I help you today?"
+                elif any(word in msg_lower for word in ["thanks", "thank you"]):
+                    response = "You're welcome! I'm here whenever you need help with your healthcare needs. Is there anything else I can assist you with?"
+                elif any(word in msg_lower for word in ["bye", "goodbye"]):
+                    response = "Goodbye! Take care of your health. Feel free to come back anytime you need assistance!"
+                else:
+                    response = "Hello! How can I help you today?"
+                
+                dispatcher.utter_message(text=response)
+                return []
+            except Exception as e:
+                logging.error(f"Error in simple query path: {e}")
+                try:
+                    dispatcher.utter_message(text="Hello! I'm Dr. AI, your healthcare assistant. How can I help you today?")
+                except:
+                    pass
+                return []
         
         # For complex queries, continue with RAG and AWS Intelligence
         # RAG STEP 1: Retrieve relevant context from database
@@ -740,20 +820,36 @@ class AWSBedrockChat(Action):
             logging.debug(f"Could not get patient info for RAG: {e}")
         
         # AWS INTELLIGENCE STEP 1: Analyze query with AWS services (only for complex queries)
-        query_analysis = self.aws_intelligence.analyze_query_intent(user_message)
-        medical_entities = self.aws_intelligence.extract_medical_entities(user_message)
-        sentiment = self.aws_intelligence.detect_sentiment(user_message)
-        key_phrases = self.aws_intelligence.detect_key_phrases(user_message)
+        aws_intelligence = self._get_aws_intelligence()
+        query_analysis = None
+        medical_entities = {}
+        sentiment = None
+        key_phrases = []
+        
+        if aws_intelligence:
+            try:
+                query_analysis = aws_intelligence.analyze_query_intent(user_message)
+                medical_entities = aws_intelligence.extract_medical_entities(user_message)
+                sentiment = aws_intelligence.detect_sentiment(user_message)
+                key_phrases = aws_intelligence.detect_key_phrases(user_message)
+            except Exception as e:
+                logging.debug(f"AWS Intelligence analysis failed: {e}")
         
         # RAG STEP 1: Retrieve relevant context from database (only for complex queries)
-        retrieved_context = self.rag_retriever.retrieve_context(
-            query=user_message,
-            user_id=user_id,
-            patient_id=patient_id
-        )
+        rag_retriever = self._get_rag_retriever()
+        retrieved_context = {}
+        context_string = ""
         
-        # Format context for LLM
-        context_string = self.rag_retriever.format_context_for_llm(retrieved_context)
+        if rag_retriever:
+            try:
+                retrieved_context = rag_retriever.retrieve_context(
+                    query=user_message,
+                    user_id=user_id,
+                    patient_id=patient_id
+                )
+                context_string = rag_retriever.format_context_for_llm(retrieved_context)
+            except Exception as e:
+                logging.debug(f"RAG retrieval failed: {e}")
         
         # Get detected intent and entities for context
         intent = tracker.latest_message.get("intent", {}).get("name", "")
@@ -824,13 +920,16 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
         # COMPLEX QUERIES: Use AWS Intelligence with timeout protection
         try:
             # Use AWS Intelligence Services for complex queries (super intelligent)
-            response = self.aws_intelligence.generate_conversational_response(
-                user_message=user_message,
-                context=retrieved_context,
-                conversation_history=conversation_history,
-                medical_entities=medical_entities,
-                sentiment=sentiment
-            )
+            if aws_intelligence:
+                response = aws_intelligence.generate_conversational_response(
+                    user_message=user_message,
+                    context=retrieved_context,
+                    conversation_history=conversation_history,
+                    medical_entities=medical_entities,
+                    sentiment=sentiment
+                )
+            else:
+                response = None
             
             # If AWS Intelligence succeeds, use it
             if response and response.strip():

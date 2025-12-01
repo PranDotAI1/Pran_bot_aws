@@ -1,0 +1,31 @@
+{
+  "lookup": {
+    "rules": {
+      "[{\"prev_action\": {\"action_name\": \"action_listen\"}, \"user\": {\"intent\": \"aws_bedrock_chat\"}}]": "action_aws_bedrock_chat",
+      "[{\"prev_action\": {\"action_name\": \"action_listen\"}, \"user\": {\"intent\": \"aws_bedrock_chat\"}}, {\"prev_action\": {\"action_name\": \"action_aws_bedrock_chat\"}, \"user\": {\"intent\": \"aws_bedrock_chat\"}}]": "action_listen",
+      "[{\"active_loop\": {\"name\": \"should_not_be_set\"}, \"prev_action\": {\"action_name\": \"appointment_form\"}}]": "action_submit_appointment",
+      "[{\"active_loop\": {\"name\": \"should_not_be_set\"}, \"prev_action\": {\"action_name\": \"appointment_form\"}}, {\"active_loop\": {\"name\": \"should_not_be_set\"}, \"prev_action\": {\"action_name\": \"action_submit_appointment\"}}]": "action_listen"
+    },
+    "rule_only_slots": [],
+    "rule_only_loops": [],
+    "rules_for_loop_unhappy_path": {
+      "[{\"prev_action\": {\"action_name\": \"action_listen\"}}, {\"active_loop\": {\"name\": \"patient_registration_form\"}, \"prev_action\": {\"action_name\": \"patient_registration_form\"}, \"user\": {\"intent\": \"patient_registration\"}}]": "do_not_predict_loop_action",
+      "[{\"prev_action\": {\"action_name\": \"patient_registration_form\"}}, {\"active_loop\": {\"name\": \"patient_registration_form\"}, \"prev_action\": {\"action_name\": \"action_patient_registration\"}, \"user\": {\"intent\": \"patient_registration\"}}]": "do_not_predict_loop_action",
+      "[{\"prev_action\": {\"action_name\": \"action_listen\"}}, {\"active_loop\": {\"name\": \"symptom_assessment_form\"}, \"prev_action\": {\"action_name\": \"symptom_assessment_form\"}, \"user\": {\"intent\": \"symptom_assessment\"}}]": "do_not_predict_loop_action",
+      "[{\"prev_action\": {\"action_name\": \"symptom_assessment_form\"}}, {\"active_loop\": {\"name\": \"symptom_assessment_form\"}, \"prev_action\": {\"action_name\": \"action_symptom_assessment\"}, \"user\": {\"intent\": \"symptom_assessment\"}}]": "do_not_predict_loop_action",
+      "[{\"prev_action\": {\"action_name\": \"action_describe_problem\"}}, {\"active_loop\": {\"name\": \"appointment_form\"}, \"prev_action\": {\"action_name\": \"appointment_form\"}, \"user\": {\"intent\": \"describe_problem\"}}]": "do_not_predict_loop_action"
+    },
+    "rules_not_in_stories": [
+      "handling active loops and forms - symptom_assessment_form - action_listen",
+      "handling active loops and forms - symptom_assessment_form",
+      "predicting default action with intent back",
+      "predicting default action with intent restart",
+      "handling active loops and forms - patient_registration_form - action_listen",
+      "predicting default action with intent session_start",
+      "[{\"active_loop\": {\"name\": \"should_not_be_set\"}, \"prev_action\": {\"action_name\": \"appointment_form\"}}, {\"active_loop\": {\"name\": \"should_not_be_set\"}, \"prev_action\": {\"action_name\": \"action_submit_appointment\"}}]",
+      "handling active loops and forms - appointment_form",
+      "handling active loops and forms - patient_registration_form",
+      "[{\"active_loop\": {\"name\": \"should_not_be_set\"}, \"prev_action\": {\"action_name\": \"appointment_form\"}}]"
+    ]
+  }
+}
