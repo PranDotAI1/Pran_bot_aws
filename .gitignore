@@ -74,3 +74,11 @@ test_*.py
 *.tar.gz
 models/*.tar.gz
 !backend/app/models/.gitkeep
+
+# Rasa cache
+.rasa/
+backend/app/.rasa/
+
+# Large binary files
+terraform
+*.zip
