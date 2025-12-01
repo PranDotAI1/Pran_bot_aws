@@ -76,6 +76,15 @@ nlu:
       - I need a neurologist
       - Find me a dermatologist
       - I'm looking for a pediatrician
+      - I need a doctor
+      - I need to see a doctor
+      - I want to see a doctor
+      - Find me a doctor
+      - Help me find a doctor
+      - I'm looking for a doctor
+      - Can you find me a doctor?
+      - I need to book with a doctor
+      - I need an appointment with a doctor
       - What services do you offer?
       - How does this platform work?
       - What can you help me with?

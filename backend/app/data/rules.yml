@@ -13,6 +13,7 @@ rules:
     steps:
       - intent: aws_bedrock_chat
       - action: action_aws_bedrock_chat
+      - action: action_listen
 
   - rule: Show insurance plans when requested
     steps:

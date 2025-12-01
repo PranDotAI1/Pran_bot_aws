@@ -54,6 +54,7 @@ stories:
     steps:
       - intent: aws_bedrock_chat
       - action: action_aws_bedrock_chat
+      - action: action_listen
 
   - story: openai
     steps:
