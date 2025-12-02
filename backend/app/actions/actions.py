@@ -732,7 +732,7 @@ class AWSBedrockChat(Action):
     def run(self, dispatcher: CollectingDispatcher,
             tracker: Tracker,
             domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
-        
+    
         try:
             # Get user message
             user_message = tracker.latest_message.get("text", "")
@@ -775,10 +775,25 @@ class AWSBedrockChat(Action):
                         sentiment=None  # Will be populated below
                     )
                     
+                    # Check if response is an error message - if so, don't use it, use fallback instead
                     if intelligent_response and intelligent_response.strip():
-                        # We got an intelligent response! Use it.
-                        dispatcher.utter_message(text=intelligent_response)
-                        return []
+                        error_indicators = [
+                            "trouble connecting to my AI brain",
+                            "AWS credentials are configured",
+                            "configuration issue",
+                            "encountered a technical issue"
+                        ]
+                        is_error_response = any(indicator in intelligent_response for indicator in error_indicators)
+                        
+                        if not is_error_response:
+                            # We got a valid intelligent response! Use it.
+                            dispatcher.utter_message(text=intelligent_response)
+                            logging.info(f"action_aws_bedrock_chat returning intelligent response: {intelligent_response[:100]}...")
+                            return []
+                        else:
+                            # Error response from Bedrock - use fallback instead
+                            logging.debug(f"Bedrock returned error message, using fallback instead")
+                            intelligent_response = None
                 except Exception as e:
                     logging.debug(f"AWS Intelligence conversational response failed: {e}")
             
@@ -801,6 +816,7 @@ class AWSBedrockChat(Action):
                         response = "Hello! How can I help you today?"
                     
                     dispatcher.utter_message(text=response)
+                    logging.info(f"action_aws_bedrock_chat returning simple response: {response[:100]}...")
                     return []
                 except Exception as e:
                     logging.error(f"Error in simple query path: {e}")
@@ -831,7 +847,7 @@ class AWSBedrockChat(Action):
             medical_entities = {}
             sentiment = None
             key_phrases = []
-        
+            
             if aws_intelligence:
                 try:
                     query_analysis = aws_intelligence.analyze_query_intent(user_message)
@@ -840,12 +856,12 @@ class AWSBedrockChat(Action):
                     key_phrases = aws_intelligence.detect_key_phrases(user_message)
                 except Exception as e:
                     logging.debug(f"AWS Intelligence analysis failed: {e}")
-        
+            
             # RAG STEP 1: Retrieve relevant context from database (only for complex queries)
             rag_retriever = self._get_rag_retriever()
             retrieved_context = {}
             context_string = ""
-        
+            
             if rag_retriever:
                 try:
                     retrieved_context = rag_retriever.retrieve_context(
@@ -856,11 +872,11 @@ class AWSBedrockChat(Action):
                     context_string = rag_retriever.format_context_for_llm(retrieved_context)
                 except Exception as e:
                     logging.debug(f"RAG retrieval failed: {e}")
-        
+            
             # Get detected intent and entities for context
             intent = tracker.latest_message.get("intent", {}).get("name", "")
             entities = tracker.latest_message.get("entities", [])
-        
+            
             # Get patient info if available for personalized responses (with timeout protection)
             patient_info = None
             appointments = None
@@ -884,7 +900,7 @@ class AWSBedrockChat(Action):
             except Exception as e:
                 logging.debug(f"Error getting patient context (non-critical): {e}")
                 # Continue without patient info - don't block
-        
+            
             # RAG STEP 2: Build enhanced message with RAG-retrieved context
             # This is the core of RAG - augmenting the prompt with retrieved data
             enhanced_message = f"""User Query: {user_message}
@@ -893,7 +909,7 @@ RETRIEVED CONTEXT FROM DATABASE (RAG):
 {context_string}
 
 Please provide a comprehensive, intelligent response based on the retrieved context above. Use the specific information (doctors, insurance plans, appointments, patient info, medications, lab results) to give accurate, helpful answers. If the context contains relevant information, reference it specifically. If not, provide general helpful guidance."""
-        
+            
             # Add intent/entity info
             context_info = []
             if intent and intent != "nlu_fallback":
@@ -901,10 +917,10 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
             if entities:
                 entity_info = ", ".join([f"{e.get('entity')}: {e.get('value')}" for e in entities])
                 context_info.append(f"Entities: {entity_info}")
-        
+            
             if context_info:
                 enhanced_message += f"\n\n[Detected: {', '.join(context_info)}]"
-        
+            
             # Get conversation history from tracker (for conversational context - back and forth)
             conversation_history = []
             for event in tracker.events[-10:]:  # Last 10 events for better conversation context
@@ -918,11 +934,11 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                         "role": "assistant",
                         "content": event.get("text", "")
                     })
-        
+            
             # AWS INTELLIGENCE STEP 2: Generate super intelligent conversational response
             # (Simple queries already handled above, so this is only for complex queries)
             response = None
-        
+            
             # COMPLEX QUERIES: Use AWS Intelligence with timeout protection
             try:
                 # Use AWS Intelligence Services for complex queries (super intelligent)
@@ -937,219 +953,232 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                 else:
                     response = None
                 
-                # If AWS Intelligence succeeds, use it
+                # Check if response is an error message - if so, don't use it
                 if response and response.strip():
-                    # Save and return intelligent response
-                    pass
+                    error_indicators = [
+                        "trouble connecting to my AI brain",
+                        "AWS credentials are configured",
+                        "configuration issue",
+                        "encountered a technical issue"
+                    ]
+                    is_error_response = any(indicator in response for indicator in error_indicators)
+                    
+                    if is_error_response:
+                        # Error response from Bedrock - use fallback instead
+                        logging.debug(f"Bedrock returned error message, using fallback instead")
+                        response = None
+                    else:
+                        # Valid response - will use it below
+                        pass
                 else:
                     raise Exception("AWS Intelligence returned empty response")
-                    
+                
             except Exception as e:
                 logging.debug(f"AWS Intelligence failed, using intelligent fallback: {e}")
-                # Fallback to intelligent response generation with database context
-                if not response:
-                    msg_lower = user_message.lower()
+            # Fallback to intelligent response generation with database context
+            if not response:
+                msg_lower = user_message.lower()
+                
+                # Check for general physician requests first
+                if any(word in msg_lower for word in ["general physician", "general practitioner", "GP", "family doctor", "primary care", "general doctor"]):
+                    specialty = "general medicine"
+                    doctors = None
+                    try:
+                        doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                    except Exception as e:
+                        logging.debug(f"Could not fetch doctors: {e}")
                     
-                    # Check for general physician requests first
-                    if any(word in msg_lower for word in ["general physician", "general practitioner", "GP", "family doctor", "primary care", "general doctor"]):
-                        specialty = "general medicine"
-                        doctors = None
+                    if doctors and len(doctors) > 0:
+                        response = f"I found {len(doctors)} general physician(s) available:\n\n"
+                        for i, doc in enumerate(doctors[:5], 1):
+                            response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                            response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                            response += f"   Department: {doc.get('department', 'General Medicine')}\n"
+                            if doc.get('phone'):
+                                response += f"   Phone: {doc.get('phone')}\n"
+                            response += "\n"
+                        response += "Would you like to book an appointment with any of these general physicians?"
+                    else:
+                        response = "I can help you find a general physician! I can search our database for available general practitioners, show you their contact information, and help you book an appointment. Would you like me to search for available general physicians now?"
+                
+                # Check for symptoms first - suggest appropriate doctor
+                elif any(word in msg_lower for word in ["fever", "cold", "cough", "suffering", "symptom", "sick", "pain"]):
+                    # Map symptoms to appropriate specialty
+                    specialty = None
+                    if "fever" in msg_lower or "cold" in msg_lower or "cough" in msg_lower:
+                        specialty = "general medicine"  # General physician for common symptoms
+                    elif "blood pressure" in msg_lower or "high-blood" in msg_lower or "hypertension" in msg_lower:
+                        specialty = "cardiology"
+                    elif "sugar" in msg_lower or "diabetes" in msg_lower or "glucose" in msg_lower:
+                        specialty = "endocrinology"
+                    elif "headache" in msg_lower or "migraine" in msg_lower:
+                        specialty = "neurology"
+                    elif "skin" in msg_lower or "rash" in msg_lower:
+                        specialty = "dermatology"
+                    
+                    # Try to get doctors for the suggested specialty
+                    doctors = None
+                    if specialty:
                         try:
                             doctors = DatabaseHelper.get_doctors(specialty=specialty)
                         except Exception as e:
                             logging.debug(f"Could not fetch doctors: {e}")
                     
-                        if doctors and len(doctors) > 0:
-                            response = f"I found {len(doctors)} general physician(s) available:\n\n"
-                            for i, doc in enumerate(doctors[:5], 1):
-                                response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
-                                response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
-                                response += f"   Department: {doc.get('department', 'General Medicine')}\n"
-                                if doc.get('phone'):
-                                    response += f"   Phone: {doc.get('phone')}\n"
-                                response += "\n"
-                            response += "Would you like to book an appointment with any of these general physicians?"
-                        else:
-                            response = "I can help you find a general physician! I can search our database for available general practitioners, show you their contact information, and help you book an appointment. Would you like me to search for available general physicians now?"
-                    
-                    # Check for symptoms first - suggest appropriate doctor
-                    elif any(word in msg_lower for word in ["fever", "cold", "cough", "suffering", "symptom", "sick", "pain"]):
-                        # Map symptoms to appropriate specialty
-                        specialty = None
+                    if doctors and len(doctors) > 0:
+                        specialty_name = "general physician" if specialty == "general medicine" else specialty.replace('_', ' ').title()
+                        response = f"Based on your symptoms, I recommend seeing a {specialty_name}. Here are available doctors:\n\n"
+                        for i, doc in enumerate(doctors[:3], 1):
+                            response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                            response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                            if doc.get('phone'):
+                                response += f"   Phone: {doc.get('phone')}\n"
+                            response += "\n"
+                        response += "Would you like to book an appointment with any of these doctors?"
+                    else:
+                        # Fallback if no doctors found
                         if "fever" in msg_lower or "cold" in msg_lower or "cough" in msg_lower:
-                            specialty = "general medicine"  # General physician for common symptoms
-                        elif "blood pressure" in msg_lower or "high-blood" in msg_lower or "hypertension" in msg_lower:
-                            specialty = "cardiology"
-                        elif "sugar" in msg_lower or "diabetes" in msg_lower or "glucose" in msg_lower:
-                            specialty = "endocrinology"
-                        elif "headache" in msg_lower or "migraine" in msg_lower:
-                            specialty = "neurology"
-                        elif "skin" in msg_lower or "rash" in msg_lower:
-                            specialty = "dermatology"
-                        
-                        # Try to get doctors for the suggested specialty
-                        doctors = None
-                        if specialty:
-                            try:
-                                doctors = DatabaseHelper.get_doctors(specialty=specialty)
-                            except Exception as e:
-                                logging.debug(f"Could not fetch doctors: {e}")
+                            response = "I understand you're experiencing fever, cold, and cough. I recommend seeing a general physician. I can help you find available doctors and book an appointment. Would you like me to search for available doctors?"
+                        elif "blood pressure" in msg_lower or "high-blood" in msg_lower:
+                            response = "For high blood pressure concerns, I recommend seeing a cardiologist. I can help you find available cardiologists and book an appointment. Would you like me to search for cardiologists?"
+                        elif "sugar" in msg_lower or "diabetes" in msg_lower:
+                            response = "For high blood sugar concerns, I recommend seeing an endocrinologist. I can help you find available endocrinologists and book an appointment. Would you like me to search for endocrinologists?"
+                        else:
+                            response = "I understand you have health concerns. I can help you find the right doctor based on your symptoms and book an appointment. Would you like me to search for available doctors?"
+                
+                elif any(word in msg_lower for word in ["insurance", "plan", "coverage"]):
+                    # Use intelligent fallback with context
+                    response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+                elif any(word in msg_lower for word in ["appointment", "book", "schedule"]):
+                    # Check if specialty is mentioned in appointment request
+                    specialty = None
+                    if "cardiologist" in msg_lower or "cardiac" in msg_lower:
+                        specialty = "cardiology"
+                    elif "gynecologist" in msg_lower or "gynec" in msg_lower:
+                        specialty = "gynecology"
+                    elif "neurologist" in msg_lower:
+                        specialty = "neurology"
+                    elif "dermatologist" in msg_lower:
+                        specialty = "dermatology"
+                    elif "pediatrician" in msg_lower:
+                        specialty = "pediatrics"
                     
+                    if specialty:
+                        # Get doctors for the requested specialty
+                        doctors = None
+                        try:
+                            doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                        except Exception as e:
+                            logging.debug(f"Could not fetch doctors: {e}")
+                        
                         if doctors and len(doctors) > 0:
-                            specialty_name = "general physician" if specialty == "general medicine" else specialty.replace('_', ' ').title()
-                            response = f"Based on your symptoms, I recommend seeing a {specialty_name}. Here are available doctors:\n\n"
+                            specialty_name = specialty.replace('_', ' ').title()
+                            response = f"Great! I can help you book an appointment with a {specialty_name}. Here are available {specialty_name}s:\n\n"
                             for i, doc in enumerate(doctors[:3], 1):
                                 response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
                                 response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
                                 if doc.get('phone'):
                                     response += f"   Phone: {doc.get('phone')}\n"
                                 response += "\n"
-                            response += "Would you like to book an appointment with any of these doctors?"
+                            response += "Which doctor would you like to book an appointment with? Please provide the doctor's name or number, and I'll help you schedule."
                         else:
-                            # Fallback if no doctors found
-                            if "fever" in msg_lower or "cold" in msg_lower or "cough" in msg_lower:
-                                response = "I understand you're experiencing fever, cold, and cough. I recommend seeing a general physician. I can help you find available doctors and book an appointment. Would you like me to search for available doctors?"
-                            elif "blood pressure" in msg_lower or "high-blood" in msg_lower:
-                                response = "For high blood pressure concerns, I recommend seeing a cardiologist. I can help you find available cardiologists and book an appointment. Would you like me to search for cardiologists?"
-                            elif "sugar" in msg_lower or "diabetes" in msg_lower:
-                                response = "For high blood sugar concerns, I recommend seeing an endocrinologist. I can help you find available endocrinologists and book an appointment. Would you like me to search for endocrinologists?"
-                            else:
-                                response = "I understand you have health concerns. I can help you find the right doctor based on your symptoms and book an appointment. Would you like me to search for available doctors?"
-                    
-                    elif any(word in msg_lower for word in ["insurance", "plan", "coverage"]):
+                            response = f"I can help you book an appointment with a {specialty.replace('_', ' ').title()}! Let me search for available doctors. Would you like me to find available {specialty.replace('_', ' ').title()}s for you?"
+                    else:
                         # Use intelligent fallback with context
                         response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
-                    elif any(word in msg_lower for word in ["appointment", "book", "schedule"]):
-                        # Check if specialty is mentioned in appointment request
-                        specialty = None
-                        if "cardiologist" in msg_lower or "cardiac" in msg_lower:
-                            specialty = "cardiology"
-                        elif "gynecologist" in msg_lower or "gynec" in msg_lower:
-                            specialty = "gynecology"
-                        elif "neurologist" in msg_lower:
-                            specialty = "neurology"
-                        elif "dermatologist" in msg_lower:
-                            specialty = "dermatology"
-                        elif "pediatrician" in msg_lower:
-                            specialty = "pediatrics"
+                elif any(word in msg_lower for word in ["show", "all", "list", "available"]) and "doctor" in msg_lower:
+                    # User wants to see all doctors - get all doctors from database
+                    doctors = None
+                    try:
+                        doctors = DatabaseHelper.get_doctors()  # No specialty filter = all doctors
+                    except Exception as e:
+                        logging.debug(f"Could not fetch doctors: {e}")
                     
-                        if specialty:
-                            # Get doctors for the requested specialty
-                            doctors = None
-                            try:
-                                doctors = DatabaseHelper.get_doctors(specialty=specialty)
-                            except Exception as e:
-                                logging.debug(f"Could not fetch doctors: {e}")
-                        
-                            if doctors and len(doctors) > 0:
-                                specialty_name = specialty.replace('_', ' ').title()
-                                response = f"Great! I can help you book an appointment with a {specialty_name}. Here are available {specialty_name}s:\n\n"
-                                for i, doc in enumerate(doctors[:3], 1):
-                                    response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
-                                    response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
-                                    if doc.get('phone'):
-                                        response += f"   Phone: {doc.get('phone')}\n"
-                                    response += "\n"
-                                response += "Which doctor would you like to book an appointment with? Please provide the doctor's name or number, and I'll help you schedule."
-                            else:
-                                response = f"I can help you book an appointment with a {specialty.replace('_', ' ').title()}! Let me search for available doctors. Would you like me to find available {specialty.replace('_', ' ').title()}s for you?"
-                        else:
-                            # Use intelligent fallback with context
-                            response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
-                    elif any(word in msg_lower for word in ["show", "all", "list", "available"]) and "doctor" in msg_lower:
-                        # User wants to see all doctors - get all doctors from database
-                        doctors = None
+                    # Fallback to API if database doesn't have doctors
+                    if not doctors or len(doctors) == 0:
                         try:
-                            doctors = DatabaseHelper.get_doctors()  # No specialty filter = all doctors
-                        except Exception as e:
-                            logging.debug(f"Could not fetch doctors: {e}")
-                        
-                        # Fallback to API if database doesn't have doctors
-                        if not doctors or len(doctors) == 0:
-                            try:
-                                response_api = requests.get(f"{REACT_APP_DUMMY_API}/doctors/all", timeout=5)
-                                response_api.raise_for_status()
-                                api_doctors = response_api.json()
-                                if api_doctors:
-                                    doctors = [{
-                                        'name': d.get('name', 'N/A'),
-                                        'specialty': d.get('specialty', 'General Medicine'),
-                                        'department': d.get('department', d.get('specialty', 'General Medicine')),
-                                        'phone': d.get('phone', 'N/A'),
-                                        'email': d.get('email', 'N/A')
-                                    } for d in api_doctors[:10]]
-                            except requests.exceptions.RequestException as e:
-                                logging.debug(f"API call failed: {e}")
-                        
-                        if doctors and len(doctors) > 0:
-                            response = f" **All Available Doctors ({len(doctors)}):**\n\n"
-                            for i, doc in enumerate(doctors[:10], 1):  # Show first 10
-                                response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
-                                response += f"    Specialty: {doc.get('specialty', 'General Medicine')}\n"
-                                response += f"    Department: {doc.get('department', 'N/A')}\n"
-                                if doc.get('phone') and doc.get('phone') != 'N/A':
-                                    response += f"    Phone: {doc.get('phone')}\n"
-                                response += "\n"
-                            response += " **Next Steps:**\n"
-                            response += "• Would you like to book an appointment with any of these doctors?\n"
-                            response += "• I can help you find a specific specialist\n"
-                            response += "• I can assist with scheduling\n\n"
-                            response += "Which doctor would you like to book an appointment with?"
-                        else:
-                            response = "I'm searching for available doctors. Let me check our database and get back to you with available options. In the meantime, you can also call our appointment line at (555) 123-4567 or visit our website to see all available doctors."
-                    elif any(word in msg_lower for word in ["find", "doctor", "gynecologist", "gynec", "obstetric", "specialist", "cardiologist", "neurologist", "dermatologist", "pediatrician", "orthopedic", "psychiatrist", "general physician", "general practitioner", "GP", "family doctor"]):
-                        # Handle doctor finding queries - get actual doctors from database
-                        specialty = None
-                        if "general physician" in msg_lower or "general practitioner" in msg_lower or "GP" in msg_lower or "family doctor" in msg_lower or "primary care" in msg_lower:
-                            specialty = "general medicine"
-                        elif "gynecologist" in msg_lower or "gynec" in msg_lower or "obstetric" in msg_lower:
-                            specialty = "gynecology"
-                        elif "cardiologist" in msg_lower or "cardiac" in msg_lower:
-                            specialty = "cardiology"
-                        elif "neurologist" in msg_lower or "neurology" in msg_lower:
-                            specialty = "neurology"
-                        elif "dermatologist" in msg_lower or "dermatology" in msg_lower:
-                            specialty = "dermatology"
-                        elif "pediatrician" in msg_lower or "pediatric" in msg_lower:
-                            specialty = "pediatrics"
-                        elif "orthopedic" in msg_lower or "orthoped" in msg_lower:
-                            specialty = "orthopedics"
-                        elif "psychiatrist" in msg_lower or "psychiatry" in msg_lower:
-                            specialty = "psychiatry"
-                        
-                        # Try to get doctors from database
-                        doctors = None
-                        try:
-                            doctors = DatabaseHelper.get_doctors(specialty=specialty)
-                        except Exception as e:
-                            logging.debug(f"Could not fetch doctors from database: {e}")
-                        
-                        if doctors and len(doctors) > 0:
-                            # Build detailed response with actual doctors
-                            response = f"I found {len(doctors)} {'gynecologist' if specialty == 'gynecology' else specialty if specialty else 'doctor'}(s) available:\n\n"
-                            for i, doc in enumerate(doctors[:5], 1):  # Show first 5
-                                response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
-                                response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
-                                response += f"   Department: {doc.get('department', 'N/A')}\n"
-                                if doc.get('phone'):
-                                    response += f"   Phone: {doc.get('phone')}\n"
-                                response += "\n"
-                            response += "Would you like to book an appointment with any of these doctors? I can help you schedule a visit!"
-                        else:
-                            # Fallback response if no doctors found - provide helpful guidance
-                            specialty_name = "gynecologist" if specialty == "gynecology" else (specialty.replace('_', ' ').title() if specialty else "doctor")
-                            response = f"I understand you're looking for a {specialty_name}. I can help you find one! I can search our database for available {specialty_name}s, show you their specialties and contact information, and help you book an appointment. Would you like me to search for available {specialty_name}s now, or would you prefer to see all available doctors? You can also call our appointment line at (555) 123-4567 for immediate assistance."
+                            response_api = requests.get(f"{REACT_APP_DUMMY_API}/doctors/all", timeout=5)
+                            response_api.raise_for_status()
+                            api_doctors = response_api.json()
+                            if api_doctors:
+                                doctors = [{
+                                    'name': d.get('name', 'N/A'),
+                                    'specialty': d.get('specialty', 'General Medicine'),
+                                    'department': d.get('department', d.get('specialty', 'General Medicine')),
+                                    'phone': d.get('phone', 'N/A'),
+                                    'email': d.get('email', 'N/A')
+                                } for d in api_doctors[:10]]
+                        except requests.exceptions.RequestException as e:
+                            logging.debug(f"API call failed: {e}")
+                    
+                    if doctors and len(doctors) > 0:
+                        response = f" **All Available Doctors ({len(doctors)}):**\n\n"
+                        for i, doc in enumerate(doctors[:10], 1):  # Show first 10
+                            response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                            response += f"    Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                            response += f"    Department: {doc.get('department', 'N/A')}\n"
+                            if doc.get('phone') and doc.get('phone') != 'N/A':
+                                response += f"    Phone: {doc.get('phone')}\n"
+                            response += "\n"
+                        response += " **Next Steps:**\n"
+                        response += "• Would you like to book an appointment with any of these doctors?\n"
+                        response += "• I can help you find a specific specialist\n"
+                        response += "• I can assist with scheduling\n\n"
+                        response += "Which doctor would you like to book an appointment with?"
                     else:
-                        # Use intelligent fallback with context (always provides response)
-                        response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
-        
+                        response = "I'm searching for available doctors. Let me check our database and get back to you with available options. In the meantime, you can also call our appointment line at (555) 123-4567 or visit our website to see all available doctors."
+                elif any(word in msg_lower for word in ["find", "doctor", "gynecologist", "gynec", "obstetric", "specialist", "cardiologist", "neurologist", "dermatologist", "pediatrician", "orthopedic", "psychiatrist", "general physician", "general practitioner", "GP", "family doctor"]):
+                    # Handle doctor finding queries - get actual doctors from database
+                    specialty = None
+                    if "general physician" in msg_lower or "general practitioner" in msg_lower or "GP" in msg_lower or "family doctor" in msg_lower or "primary care" in msg_lower:
+                        specialty = "general medicine"
+                    elif "gynecologist" in msg_lower or "gynec" in msg_lower or "obstetric" in msg_lower:
+                        specialty = "gynecology"
+                    elif "cardiologist" in msg_lower or "cardiac" in msg_lower:
+                        specialty = "cardiology"
+                    elif "neurologist" in msg_lower or "neurology" in msg_lower:
+                        specialty = "neurology"
+                    elif "dermatologist" in msg_lower or "dermatology" in msg_lower:
+                        specialty = "dermatology"
+                    elif "pediatrician" in msg_lower or "pediatric" in msg_lower:
+                        specialty = "pediatrics"
+                    elif "orthopedic" in msg_lower or "orthoped" in msg_lower:
+                        specialty = "orthopedics"
+                    elif "psychiatrist" in msg_lower or "psychiatry" in msg_lower:
+                        specialty = "psychiatry"
+                    
+                    # Try to get doctors from database
+                    doctors = None
+                    try:
+                        doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                    except Exception as e:
+                        logging.debug(f"Could not fetch doctors from database: {e}")
+                    
+                    if doctors and len(doctors) > 0:
+                        # Build detailed response with actual doctors
+                        response = f"I found {len(doctors)} {'gynecologist' if specialty == 'gynecology' else specialty if specialty else 'doctor'}(s) available:\n\n"
+                        for i, doc in enumerate(doctors[:5], 1):  # Show first 5
+                            response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                            response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                            response += f"   Department: {doc.get('department', 'N/A')}\n"
+                            if doc.get('phone'):
+                                response += f"   Phone: {doc.get('phone')}\n"
+                            response += "\n"
+                        response += "Would you like to book an appointment with any of these doctors? I can help you schedule a visit!"
+                    else:
+                        # Fallback response if no doctors found - provide helpful guidance
+                        specialty_name = "gynecologist" if specialty == "gynecology" else (specialty.replace('_', ' ').title() if specialty else "doctor")
+                        response = f"I understand you're looking for a {specialty_name}. I can help you find one! I can search our database for available {specialty_name}s, show you their specialties and contact information, and help you book an appointment. Would you like me to search for available {specialty_name}s now, or would you prefer to see all available doctors? You can also call our appointment line at (555) 123-4567 for immediate assistance."
+                else:
+                    # Use intelligent fallback with context (always provides response)
+                    response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+            
             # Ensure we have a response - use intelligent fallback with context for ALL queries
             if not response or response.strip() == "":
                 # Use intelligent fallback that handles ALL query types with context
                 response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
-            
-            # Enhance with retrieved context if available
-            if retrieved_context:
+                
+                # Enhance with retrieved context if available
+                if retrieved_context:
                     if retrieved_context.get('doctors'):
                         doctors = retrieved_context['doctors']
                         if doctors and len(doctors) > 0:
@@ -1157,17 +1186,17 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                             for i, doc in enumerate(doctors[:3], 1):
                                 response += f"{i}. Dr. {doc.get('name', 'N/A')} - {doc.get('specialty', 'General Medicine')}\n"
                             response += "\nWould you like to book an appointment with any of these doctors?"
-                
+                    
                     if retrieved_context.get('insurance_plans'):
                         plans = retrieved_context['insurance_plans']
                         if plans and len(plans) > 0:
                             response += f"\n\nI found {len(plans)} insurance plan(s) available. Would you like to see details?"
-                
+                    
                     if retrieved_context.get('appointments'):
                         appointments_list = retrieved_context['appointments']
                         if appointments_list and len(appointments_list) > 0:
                             response += f"\n\nYou have {len(appointments_list)} upcoming appointment(s). Would you like to manage them?"
-        
+            
             # Save conversation history to database (non-blocking, don't wait)
             # Do this asynchronously - don't block the response
             try:
@@ -1179,10 +1208,12 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                 )
             except Exception:
                 pass  # Ignore errors - non-critical
-        
+            
+            # Send response (only once)
             dispatcher.utter_message(text=response)
             logging.info(f"action_aws_bedrock_chat returning response: {response[:100]}...")
             return []
+            
         except Exception as e:
             # Catch any unhandled exceptions
             logging.error(f"Critical error in action_aws_bedrock_chat: {e}")
@@ -1191,7 +1222,8 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
             try:
                 dispatcher.utter_message(text="Hello! I'm Dr. AI, your healthcare assistant. How can I help you today?")
                 return []
-            except:
+            except Exception as e2:
+                logging.error(f"Error in final fallback: {e2}")
                 return []
 
 
