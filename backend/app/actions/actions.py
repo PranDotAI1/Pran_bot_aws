@@ -1197,6 +1197,17 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                         if appointments_list and len(appointments_list) > 0:
                             response += f"\n\nYou have {len(appointments_list)} upcoming appointment(s). Would you like to manage them?"
             
+            # Final safety check - ensure we ALWAYS have a response
+            if not response or response.strip() == "":
+                # Ultimate fallback - provide helpful response based on message
+                msg_lower = user_message.lower()
+                if any(word in msg_lower for word in ["suffering", "sick", "symptom", "pain", "fever", "cold", "cough", "viral", "infection"]):
+                    response = "I understand you're not feeling well. I can help you find the right doctor based on your symptoms, book an appointment, or provide general health guidance. What specific symptoms are you experiencing?"
+                elif any(word in msg_lower for word in ["help", "assist", "how can you", "what can you"]):
+                    response = "I'm Dr. AI, your healthcare assistant! I can help you with finding doctors, booking appointments, health questions, insurance information, and more. What would you like help with today?"
+                else:
+                    response = "I'm here to help with all your healthcare needs - appointments, insurance, health questions, medications, and more. What would you like to know?"
+            
             # Save conversation history to database (non-blocking, don't wait)
             # Do this asynchronously - don't block the response
             try:
@@ -1209,9 +1220,14 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
             except Exception:
                 pass  # Ignore errors - non-critical
             
-            # Send response (only once)
-            dispatcher.utter_message(text=response)
-            logging.info(f"action_aws_bedrock_chat returning response: {response[:100]}...")
+            # Send response (only once) - ensure response is not empty
+            if response and response.strip():
+                dispatcher.utter_message(text=response)
+                logging.info(f"action_aws_bedrock_chat returning response: {response[:100]}...")
+            else:
+                # Last resort fallback
+                dispatcher.utter_message(text="I'm here to help with all your healthcare needs. How can I assist you today?")
+                logging.warning(f"action_aws_bedrock_chat: Response was empty, using fallback")
             return []
             
         except Exception as e:
@@ -1755,16 +1771,40 @@ class ActionDefaultFallback(Action):
                 })
         
         # Use AWS Bedrock for intelligent response
-        response = self.bedrock_helper.get_response(enhanced_message, conversation_history)
+        try:
+            response = self.bedrock_helper.get_response(enhanced_message, conversation_history)
+            
+            # Check if response is an error message
+            if response and response.strip():
+                error_indicators = [
+                    "trouble connecting to my AI brain",
+                    "AWS credentials are configured",
+                    "configuration issue",
+                    "encountered a technical issue"
+                ]
+                is_error_response = any(indicator in response for indicator in error_indicators)
+                if is_error_response:
+                    response = None  # Use fallback instead
+        except Exception as e:
+            logging.debug(f"Bedrock failed in default fallback: {e}")
+            response = None
         
         if not response or response.strip() == "":
             # Provide helpful fallback based on user message
-            if "insurance" in user_message.lower():
+            msg_lower = user_message.lower()
+            
+            if "insurance" in msg_lower:
                 response = "I can help with insurance! We offer various plans and can verify coverage. What would you like to know?"
-            elif "appointment" in user_message.lower():
+            elif "appointment" in msg_lower or "book" in msg_lower or "schedule" in msg_lower:
                 response = "I can help you book appointments! I can find doctors and schedule visits. Would you like to proceed?"
-            elif "health" in user_message.lower() or "symptom" in user_message.lower():
+            elif any(word in msg_lower for word in ["suffering", "sick", "symptom", "pain", "fever", "cold", "cough", "viral", "infection", "unwell", "not feeling well"]):
+                response = "I understand you're not feeling well. I can help you find the right doctor based on your symptoms, book an appointment, or provide general health guidance. What symptoms are you experiencing?"
+            elif any(word in msg_lower for word in ["help", "assist", "how can you", "what can you", "capabilities", "services"]):
+                response = "I'm Dr. AI, your healthcare assistant! I can help you with:\n\n• Finding doctors and specialists\n• Booking appointments\n• Health questions and symptom assessment\n• Insurance information and plans\n• Medication reminders\n• Lab results and medical records\n• And much more!\n\nWhat would you like help with today?"
+            elif "health" in msg_lower or "medical" in msg_lower:
                 response = "I can help with health questions! I can assist with symptom assessment, finding doctors, booking appointments, and more. What do you need?"
+            elif "doctor" in msg_lower:
+                response = "I can help you find doctors! I can search by specialty, show available doctors, and help you book appointments. What type of doctor are you looking for?"
             else:
                 response = "I'm here to help with all your healthcare needs - appointments, insurance, health questions, medications, and more. What would you like to know?"
         

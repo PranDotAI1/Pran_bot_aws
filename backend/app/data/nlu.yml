@@ -46,6 +46,33 @@ nlu:
       - What's wrong with me?
       - I have symptoms
       - Tell me about my condition
+      - I am suffering from viral
+      - I'm suffering from viral infection
+      - I have a viral infection
+      - I'm suffering from a virus
+      - I have viral symptoms
+      - How can you help me?
+      - What can you help me with?
+      - How can you assist me?
+      - What assistance can you provide?
+      - What help can you offer?
+      - I need help
+      - I need assistance
+      - Can you assist me?
+      - Help me please
+      - I need your help
+      - What services do you provide?
+      - What can you do for me?
+      - How do you work?
+      - What are you capable of?
+      - Tell me what you can do
+      - Explain your capabilities
+      - I'm not feeling well
+      - I feel unwell
+      - I'm sick
+      - I have health issues
+      - I need medical help
+      - I need healthcare assistance
       - What insurance plans do you have?
       - How does insurance work here?
       - What's covered by my insurance?
