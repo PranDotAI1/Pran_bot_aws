@@ -14,6 +14,12 @@ rules:
       - intent: aws_bedrock_chat
       - action: action_aws_bedrock_chat
       - action: action_listen
+  
+  - rule: Handle NLU fallback with intelligent response
+    steps:
+      - intent: nlu_fallback
+      - action: action_aws_bedrock_chat
+      - action: action_listen
 
   - rule: Show insurance plans when requested
     steps:

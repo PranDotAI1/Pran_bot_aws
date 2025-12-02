@@ -1225,21 +1225,43 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                 dispatcher.utter_message(text=response)
                 logging.info(f"action_aws_bedrock_chat returning response: {response[:100]}...")
             else:
-                # Last resort fallback
-                dispatcher.utter_message(text="I'm here to help with all your healthcare needs. How can I assist you today?")
-                logging.warning(f"action_aws_bedrock_chat: Response was empty, using fallback")
+                # Last resort fallback - provide helpful response based on message
+                msg_lower = user_message.lower()
+                if any(word in msg_lower for word in ["suffering", "sick", "symptom", "pain", "fever", "cold", "cough", "viral", "infection"]):
+                    fallback_response = "I understand you're not feeling well. I can help you find the right doctor based on your symptoms, book an appointment, or provide general health guidance. What specific symptoms are you experiencing?"
+                elif any(word in msg_lower for word in ["help", "assist", "how can you", "what can you"]):
+                    fallback_response = "I'm Dr. AI, your healthcare assistant! I can help you with finding doctors, booking appointments, health questions, insurance information, and more. What would you like help with today?"
+                else:
+                    fallback_response = "I'm here to help with all your healthcare needs - appointments, insurance, health questions, medications, and more. What would you like to know?"
+                
+                dispatcher.utter_message(text=fallback_response)
+                logging.warning(f"action_aws_bedrock_chat: Response was empty, using fallback: {fallback_response[:50]}...")
             return []
             
         except Exception as e:
-            # Catch any unhandled exceptions
+            # Catch any unhandled exceptions - ALWAYS return a response
             logging.error(f"Critical error in action_aws_bedrock_chat: {e}")
             import traceback
             logging.error(traceback.format_exc())
+            
+            # Provide helpful response even on error
             try:
-                dispatcher.utter_message(text="Hello! I'm Dr. AI, your healthcare assistant. How can I help you today?")
+                user_message = tracker.latest_message.get("text", "") if 'tracker' in locals() else ""
+                msg_lower = user_message.lower() if user_message else ""
+                
+                if any(word in msg_lower for word in ["suffering", "sick", "symptom", "viral", "infection"]):
+                    error_response = "I understand you're not feeling well. I can help you find the right doctor, book an appointment, or provide health guidance. What symptoms are you experiencing?"
+                elif any(word in msg_lower for word in ["help", "assist", "how can you"]):
+                    error_response = "I'm Dr. AI, your healthcare assistant! I can help with finding doctors, booking appointments, health questions, and more. What would you like help with?"
+                else:
+                    error_response = "Hello! I'm Dr. AI, your healthcare assistant. I can help with appointments, insurance, health questions, and more. How can I assist you today?"
+                
+                dispatcher.utter_message(text=error_response)
+                logging.info(f"action_aws_bedrock_chat: Error handled, returning fallback response")
                 return []
             except Exception as e2:
                 logging.error(f"Error in final fallback: {e2}")
+                # Last resort - return empty list (Rasa will handle it)
                 return []
 
 
