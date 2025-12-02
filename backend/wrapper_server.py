@@ -283,10 +283,10 @@ def rasa_wrapper():
         
         # Forward request to Rasa
         try:
-            rasa_response = requests.post(RASA_WEBHOOK_URL, json=rasa_payload, timeout=30)
+        rasa_response = requests.post(RASA_WEBHOOK_URL, json=rasa_payload, timeout=30)
             rasa_response.raise_for_status()  # Raise exception for bad status codes
-            rasa_response_data = rasa_response.json()
-            
+        rasa_response_data = rasa_response.json()
+        
             # Ensure response is in correct format (array of messages)
             if not isinstance(rasa_response_data, list):
                 # If response is not a list, wrap it
@@ -314,8 +314,8 @@ def rasa_wrapper():
             logger.error(f"Rasa HTTP error: {e}")
             # Return helpful response instead of error
             return jsonify([{"text": "I'm here to help with all your healthcare needs. How can I assist you today?", "recipient_id": sender_id}]), 200
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Rasa request error: {e}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Rasa request error: {e}")
             # Return helpful response instead of error
             return jsonify([{"text": "I'm here to help with all your healthcare needs. How can I assist you today?", "recipient_id": sender_id}]), 200
     

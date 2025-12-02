@@ -700,7 +700,7 @@ class AWSBedrockChat(Action):
         """Lazy initialization of Bedrock helper"""
         if self.bedrock_helper is None:
             try:
-                self.bedrock_helper = AWSBedrockHelper()
+        self.bedrock_helper = AWSBedrockHelper()
             except Exception as e:
                 logging.warning(f"Could not initialize Bedrock helper: {e}")
                 self.bedrock_helper = None
@@ -710,7 +710,7 @@ class AWSBedrockChat(Action):
         """Lazy initialization of RAG retriever"""
         if self.rag_retriever is None:
             try:
-                self.rag_retriever = RAGRetriever()
+        self.rag_retriever = RAGRetriever()
             except Exception as e:
                 logging.warning(f"Could not initialize RAG retriever: {e}")
                 self.rag_retriever = None
@@ -720,7 +720,7 @@ class AWSBedrockChat(Action):
         """Lazy initialization of AWS Intelligence"""
         if self.aws_intelligence is None:
             try:
-                self.aws_intelligence = AWSIntelligenceServices()
+        self.aws_intelligence = AWSIntelligenceServices()
             except Exception as e:
                 logging.warning(f"Could not initialize AWS Intelligence: {e}")
                 self.aws_intelligence = None
@@ -734,11 +734,11 @@ class AWSBedrockChat(Action):
             domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
     
         try:
-            # Get user message
-            user_message = tracker.latest_message.get("text", "")
-            sender_id = tracker.sender_id
-            msg_lower = user_message.lower()
-            
+        # Get user message
+        user_message = tracker.latest_message.get("text", "")
+        sender_id = tracker.sender_id
+        msg_lower = user_message.lower()
+        
             logging.info(f"action_aws_bedrock_chat called with message: '{user_message}'")
             
             # Get conversation history for intelligent responses
@@ -798,24 +798,24 @@ class AWSBedrockChat(Action):
                     logging.debug(f"AWS Intelligence conversational response failed: {e}")
             
             # Check if it's a simple query (greetings, etc.)
-            is_simple_query = any(word in msg_lower for word in [
-                "hi", "hello", "hey", "good morning", "good afternoon", "good evening",
-                "thanks", "thank you", "bye", "goodbye"
-            ])
-            
-            if is_simple_query:
+        is_simple_query = any(word in msg_lower for word in [
+            "hi", "hello", "hey", "good morning", "good afternoon", "good evening",
+            "thanks", "thank you", "bye", "goodbye"
+        ])
+        
+        if is_simple_query:
                 # Simple response if Bedrock not available
                 try:
-                    if any(word in msg_lower for word in ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]):
+            if any(word in msg_lower for word in ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]):
                         response = "Hello! I'm Dr. AI, your super intelligent healthcare assistant. I'm here to help with all your healthcare needs - appointments, insurance, finding doctors, symptom assessment, and more. How can I help you today?"
-                    elif any(word in msg_lower for word in ["thanks", "thank you"]):
-                        response = "You're welcome! I'm here whenever you need help with your healthcare needs. Is there anything else I can assist you with?"
-                    elif any(word in msg_lower for word in ["bye", "goodbye"]):
-                        response = "Goodbye! Take care of your health. Feel free to come back anytime you need assistance!"
-                    else:
-                        response = "Hello! How can I help you today?"
-                    
-                    dispatcher.utter_message(text=response)
+            elif any(word in msg_lower for word in ["thanks", "thank you"]):
+                response = "You're welcome! I'm here whenever you need help with your healthcare needs. Is there anything else I can assist you with?"
+            elif any(word in msg_lower for word in ["bye", "goodbye"]):
+                response = "Goodbye! Take care of your health. Feel free to come back anytime you need assistance!"
+            else:
+                response = "Hello! How can I help you today?"
+            
+            dispatcher.utter_message(text=response)
                     logging.info(f"action_aws_bedrock_chat returning simple response: {response[:100]}...")
                     return []
                 except Exception as e:
@@ -827,21 +827,21 @@ class AWSBedrockChat(Action):
                         return []
                     except Exception as e2:
                         logging.error(f"Error in fallback: {e2}")
-                        return []
-            
+            return []
+        
             # For complex queries (not simple greetings), continue with RAG and AWS Intelligence
-            # RAG STEP 1: Retrieve relevant context from database
-            user_id = tracker.get_slot("user_id")
-            patient_id = None
-            patient_info = None
-            try:
-                patient_info = DatabaseHelper.get_patient_info(user_id=user_id)
-                if patient_info:
-                    patient_id = patient_info.get('patient_id')
-            except Exception as e:
-                logging.debug(f"Could not get patient info for RAG: {e}")
-            
-            # AWS INTELLIGENCE STEP 1: Analyze query with AWS services (only for complex queries)
+        # RAG STEP 1: Retrieve relevant context from database
+        user_id = tracker.get_slot("user_id")
+        patient_id = None
+        patient_info = None
+        try:
+            patient_info = DatabaseHelper.get_patient_info(user_id=user_id)
+            if patient_info:
+                patient_id = patient_info.get('patient_id')
+        except Exception as e:
+            logging.debug(f"Could not get patient info for RAG: {e}")
+        
+        # AWS INTELLIGENCE STEP 1: Analyze query with AWS services (only for complex queries)
             aws_intelligence = self._get_aws_intelligence()
             query_analysis = None
             medical_entities = {}
@@ -856,8 +856,8 @@ class AWSBedrockChat(Action):
                     key_phrases = aws_intelligence.detect_key_phrases(user_message)
                 except Exception as e:
                     logging.debug(f"AWS Intelligence analysis failed: {e}")
-            
-            # RAG STEP 1: Retrieve relevant context from database (only for complex queries)
+        
+        # RAG STEP 1: Retrieve relevant context from database (only for complex queries)
             rag_retriever = self._get_rag_retriever()
             retrieved_context = {}
             context_string = ""
@@ -865,96 +865,96 @@ class AWSBedrockChat(Action):
             if rag_retriever:
                 try:
                     retrieved_context = rag_retriever.retrieve_context(
-                        query=user_message,
-                        user_id=user_id,
-                        patient_id=patient_id
-                    )
+            query=user_message,
+            user_id=user_id,
+            patient_id=patient_id
+        )
                     context_string = rag_retriever.format_context_for_llm(retrieved_context)
                 except Exception as e:
                     logging.debug(f"RAG retrieval failed: {e}")
-            
-            # Get detected intent and entities for context
-            intent = tracker.latest_message.get("intent", {}).get("name", "")
-            entities = tracker.latest_message.get("entities", [])
-            
-            # Get patient info if available for personalized responses (with timeout protection)
-            patient_info = None
-            appointments = None
-            try:
-                user_id = tracker.get_slot("user_id")
-                if user_id:
-                    # Quick timeout for patient info
-                    import signal
-                    def timeout_handler(signum, frame):
-                        raise TimeoutError("Patient info query timed out")
-                    
-                    # Try to get patient info but don't block if it's slow
-                    try:
-                        patient_info = DatabaseHelper.get_patient_info(user_id=user_id)
-                        if patient_info:
-                            appointments = DatabaseHelper.get_appointments(patient_id=patient_info.get('patient_id'))
-                    except Exception as e:
-                        logging.debug(f"Could not fetch patient info (non-critical): {e}")
-                        patient_info = None
-                        appointments = None
-            except Exception as e:
-                logging.debug(f"Error getting patient context (non-critical): {e}")
-                # Continue without patient info - don't block
-            
-            # RAG STEP 2: Build enhanced message with RAG-retrieved context
-            # This is the core of RAG - augmenting the prompt with retrieved data
-            enhanced_message = f"""User Query: {user_message}
+        
+        # Get detected intent and entities for context
+        intent = tracker.latest_message.get("intent", {}).get("name", "")
+        entities = tracker.latest_message.get("entities", [])
+        
+        # Get patient info if available for personalized responses (with timeout protection)
+        patient_info = None
+        appointments = None
+        try:
+            user_id = tracker.get_slot("user_id")
+            if user_id:
+                # Quick timeout for patient info
+                import signal
+                def timeout_handler(signum, frame):
+                    raise TimeoutError("Patient info query timed out")
+                
+                # Try to get patient info but don't block if it's slow
+                try:
+                    patient_info = DatabaseHelper.get_patient_info(user_id=user_id)
+                    if patient_info:
+                        appointments = DatabaseHelper.get_appointments(patient_id=patient_info.get('patient_id'))
+                except Exception as e:
+                    logging.debug(f"Could not fetch patient info (non-critical): {e}")
+                    patient_info = None
+                    appointments = None
+        except Exception as e:
+            logging.debug(f"Error getting patient context (non-critical): {e}")
+            # Continue without patient info - don't block
+        
+        # RAG STEP 2: Build enhanced message with RAG-retrieved context
+        # This is the core of RAG - augmenting the prompt with retrieved data
+        enhanced_message = f"""User Query: {user_message}
 
 RETRIEVED CONTEXT FROM DATABASE (RAG):
 {context_string}
 
 Please provide a comprehensive, intelligent response based on the retrieved context above. Use the specific information (doctors, insurance plans, appointments, patient info, medications, lab results) to give accurate, helpful answers. If the context contains relevant information, reference it specifically. If not, provide general helpful guidance."""
-            
-            # Add intent/entity info
-            context_info = []
-            if intent and intent != "nlu_fallback":
-                context_info.append(f"Intent: {intent}")
-            if entities:
-                entity_info = ", ".join([f"{e.get('entity')}: {e.get('value')}" for e in entities])
-                context_info.append(f"Entities: {entity_info}")
-            
-            if context_info:
-                enhanced_message += f"\n\n[Detected: {', '.join(context_info)}]"
-            
-            # Get conversation history from tracker (for conversational context - back and forth)
-            conversation_history = []
-            for event in tracker.events[-10:]:  # Last 10 events for better conversation context
-                if event.get("event") == "user":
-                    conversation_history.append({
-                        "role": "user",
-                        "content": event.get("text", "")
-                    })
-                elif event.get("event") == "bot":
-                    conversation_history.append({
-                        "role": "assistant",
-                        "content": event.get("text", "")
-                    })
-            
-            # AWS INTELLIGENCE STEP 2: Generate super intelligent conversational response
-            # (Simple queries already handled above, so this is only for complex queries)
-            response = None
-            
-            # COMPLEX QUERIES: Use AWS Intelligence with timeout protection
-            try:
-                # Use AWS Intelligence Services for complex queries (super intelligent)
+        
+        # Add intent/entity info
+        context_info = []
+        if intent and intent != "nlu_fallback":
+            context_info.append(f"Intent: {intent}")
+        if entities:
+            entity_info = ", ".join([f"{e.get('entity')}: {e.get('value')}" for e in entities])
+            context_info.append(f"Entities: {entity_info}")
+        
+        if context_info:
+            enhanced_message += f"\n\n[Detected: {', '.join(context_info)}]"
+        
+        # Get conversation history from tracker (for conversational context - back and forth)
+        conversation_history = []
+        for event in tracker.events[-10:]:  # Last 10 events for better conversation context
+            if event.get("event") == "user":
+                conversation_history.append({
+                    "role": "user",
+                    "content": event.get("text", "")
+                })
+            elif event.get("event") == "bot":
+                conversation_history.append({
+                    "role": "assistant",
+                    "content": event.get("text", "")
+                })
+        
+        # AWS INTELLIGENCE STEP 2: Generate super intelligent conversational response
+        # (Simple queries already handled above, so this is only for complex queries)
+        response = None
+        
+        # COMPLEX QUERIES: Use AWS Intelligence with timeout protection
+        try:
+            # Use AWS Intelligence Services for complex queries (super intelligent)
                 if aws_intelligence:
                     response = aws_intelligence.generate_conversational_response(
-                        user_message=user_message,
-                        context=retrieved_context,
-                        conversation_history=conversation_history,
-                        medical_entities=medical_entities,
-                        sentiment=sentiment
-                    )
+                user_message=user_message,
+                context=retrieved_context,
+                conversation_history=conversation_history,
+                medical_entities=medical_entities,
+                sentiment=sentiment
+            )
                 else:
                     response = None
-                
+            
                 # Check if response is an error message - if so, don't use it
-                if response and response.strip():
+            if response and response.strip():
                     error_indicators = [
                         "trouble connecting to my AI brain",
                         "AWS credentials are configured",
@@ -969,12 +969,12 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                         response = None
                     else:
                         # Valid response - will use it below
-                        pass
-                else:
-                    raise Exception("AWS Intelligence returned empty response")
+                pass
+            else:
+                raise Exception("AWS Intelligence returned empty response")
                 
-            except Exception as e:
-                logging.debug(f"AWS Intelligence failed, using intelligent fallback: {e}")
+        except Exception as e:
+            logging.debug(f"AWS Intelligence failed, using intelligent fallback: {e}")
             # Fallback to intelligent response generation with database context
             if not response:
                 msg_lower = user_message.lower()
@@ -1171,32 +1171,32 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                 else:
                     # Use intelligent fallback with context (always provides response)
                     response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+        
+        # Ensure we have a response - use intelligent fallback with context for ALL queries
+        if not response or response.strip() == "":
+            # Use intelligent fallback that handles ALL query types with context
+            response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
             
-            # Ensure we have a response - use intelligent fallback with context for ALL queries
-            if not response or response.strip() == "":
-                # Use intelligent fallback that handles ALL query types with context
-                response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+            # Enhance with retrieved context if available
+            if retrieved_context:
+                if retrieved_context.get('doctors'):
+                    doctors = retrieved_context['doctors']
+                    if doctors and len(doctors) > 0:
+                        response += f"\n\nI found {len(doctors)} relevant doctor(s) in our system:\n"
+                        for i, doc in enumerate(doctors[:3], 1):
+                            response += f"{i}. Dr. {doc.get('name', 'N/A')} - {doc.get('specialty', 'General Medicine')}\n"
+                        response += "\nWould you like to book an appointment with any of these doctors?"
                 
-                # Enhance with retrieved context if available
-                if retrieved_context:
-                    if retrieved_context.get('doctors'):
-                        doctors = retrieved_context['doctors']
-                        if doctors and len(doctors) > 0:
-                            response += f"\n\nI found {len(doctors)} relevant doctor(s) in our system:\n"
-                            for i, doc in enumerate(doctors[:3], 1):
-                                response += f"{i}. Dr. {doc.get('name', 'N/A')} - {doc.get('specialty', 'General Medicine')}\n"
-                            response += "\nWould you like to book an appointment with any of these doctors?"
-                    
-                    if retrieved_context.get('insurance_plans'):
-                        plans = retrieved_context['insurance_plans']
-                        if plans and len(plans) > 0:
-                            response += f"\n\nI found {len(plans)} insurance plan(s) available. Would you like to see details?"
-                    
-                    if retrieved_context.get('appointments'):
-                        appointments_list = retrieved_context['appointments']
-                        if appointments_list and len(appointments_list) > 0:
-                            response += f"\n\nYou have {len(appointments_list)} upcoming appointment(s). Would you like to manage them?"
-            
+                if retrieved_context.get('insurance_plans'):
+                    plans = retrieved_context['insurance_plans']
+                    if plans and len(plans) > 0:
+                        response += f"\n\nI found {len(plans)} insurance plan(s) available. Would you like to see details?"
+                
+                if retrieved_context.get('appointments'):
+                    appointments_list = retrieved_context['appointments']
+                    if appointments_list and len(appointments_list) > 0:
+                        response += f"\n\nYou have {len(appointments_list)} upcoming appointment(s). Would you like to manage them?"
+        
             # Final safety check - ensure we ALWAYS have a response
             if not response or response.strip() == "":
                 # Ultimate fallback - provide helpful response based on message
@@ -1208,21 +1208,21 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                 else:
                     response = "I'm here to help with all your healthcare needs - appointments, insurance, health questions, medications, and more. What would you like to know?"
             
-            # Save conversation history to database (non-blocking, don't wait)
-            # Do this asynchronously - don't block the response
-            try:
-                # Just try to save, don't wait for it
-                DatabaseHelper.save_conversation_history(
-                    sender_id, user_message, response,
-                    intent=intent,
-                    entities=entities
-                )
-            except Exception:
-                pass  # Ignore errors - non-critical
-            
+        # Save conversation history to database (non-blocking, don't wait)
+        # Do this asynchronously - don't block the response
+        try:
+            # Just try to save, don't wait for it
+            DatabaseHelper.save_conversation_history(
+                sender_id, user_message, response,
+                intent=intent,
+                entities=entities
+            )
+        except Exception:
+            pass  # Ignore errors - non-critical
+        
             # Send response (only once) - ensure response is not empty
             if response and response.strip():
-                dispatcher.utter_message(text=response)
+        dispatcher.utter_message(text=response)
                 logging.info(f"action_aws_bedrock_chat returning response: {response[:100]}...")
             else:
                 # Last resort fallback - provide helpful response based on message
@@ -1262,7 +1262,7 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
             except Exception as e2:
                 logging.error(f"Error in final fallback: {e2}")
                 # Last resort - return empty list (Rasa will handle it)
-                return []
+        return []
 
 
 class ActionDescribeProblem(Action):
@@ -1794,7 +1794,7 @@ class ActionDefaultFallback(Action):
         
         # Use AWS Bedrock for intelligent response
         try:
-            response = self.bedrock_helper.get_response(enhanced_message, conversation_history)
+        response = self.bedrock_helper.get_response(enhanced_message, conversation_history)
             
             # Check if response is an error message
             if response and response.strip():
