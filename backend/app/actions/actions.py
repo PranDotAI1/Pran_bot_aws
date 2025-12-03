@@ -814,6 +814,10 @@ Try asking: What services do you offer? or How do I book an appointment?"""
 class AWSBedrockChat(Action):
     """Super intelligent RAG-powered chatbot with AWS services for conversational responses"""
     
+    # Class-level guard to prevent multiple executions for same message
+    _execution_tracker = {}
+    _execution_lock = threading.Lock()
+    
     def __init__(self):
         # Lazy initialization - only create services when needed
         # This allows simple queries to work even if AWS services fail
