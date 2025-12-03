@@ -1459,6 +1459,87 @@ class AWSBedrockChat(Action):
                         logging.info("action_aws_bedrock_chat: Handled generic 'yes' with error fallback")
                         return []
             
+            # PRIORITY: Handle doctor queries DIRECTLY - always show doctors, never generic messages
+            # This ensures "suggest me some doctors", "doctor names", "psychatrist" etc. always work
+            msg_lower = user_message.lower()
+            
+            # Detect doctor-related queries (including misspellings)
+            is_doctor_query = any(word in msg_lower for word in [
+                "doctor", "doctors", "physician", "physicians", "specialist", "specialists",
+                "suggest", "show", "find", "list", "names", "name",
+                "gynecologist", "gynacologist", "gynec", "gynaec", "obstetric",
+                "cardiologist", "neurologist", "dermatologist", "pediatrician",
+                "psychiatrist", "psychatrist", "psychologist",  # Handle misspellings
+                "gastroenterologist", "endocrinologist", "urologist",
+                "orthopedic", "orthopedist", "ophthalmologist", "pulmonologist",
+                "ent", "available doctor", "any doctor"
+            ])
+            
+            if is_doctor_query:
+                # Extract specialty from query
+                specialty = None
+                specialty_display_name = "doctor"
+                
+                if "psychatrist" in msg_lower or "psychiatrist" in msg_lower or "psychologist" in msg_lower:
+                    specialty = "psychiatry"
+                    specialty_display_name = "psychiatrist"
+                elif "gynecologist" in msg_lower or "gynacologist" in msg_lower or "gynec" in msg_lower or "gynaec" in msg_lower or "obstetric" in msg_lower:
+                    specialty = "gynecology"
+                    specialty_display_name = "gynecologist"
+                elif "cardiologist" in msg_lower:
+                    specialty = "cardiology"
+                    specialty_display_name = "cardiologist"
+                elif "neurologist" in msg_lower:
+                    specialty = "neurology"
+                    specialty_display_name = "neurologist"
+                elif "dermatologist" in msg_lower:
+                    specialty = "dermatology"
+                    specialty_display_name = "dermatologist"
+                elif "pediatrician" in msg_lower or "pediatric" in msg_lower:
+                    specialty = "pediatrics"
+                    specialty_display_name = "pediatrician"
+                elif "viral" in msg_lower or "symptom" in msg_lower or "suffering" in msg_lower:
+                    specialty = "general medicine"
+                    specialty_display_name = "general physician"
+                
+                # ALWAYS retrieve and show doctors
+                doctors = None
+                try:
+                    if specialty:
+                        doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                    else:
+                        doctors = DatabaseHelper.get_doctors(limit=10)
+                except Exception as e:
+                    logging.error(f"Error retrieving doctors: {e}")
+                
+                # ALWAYS use sample doctors if database fails
+                if not doctors or len(doctors) == 0:
+                    doctors = DatabaseHelper._get_sample_doctors(specialty or 'general medicine')
+                
+                # ALWAYS show doctors (never generic message)
+                if doctors and len(doctors) > 0:
+                    response = f"✅ **I found {len(doctors)} {specialty_display_name}{'s' if len(doctors) > 1 else ''}:**\n\n"
+                    for i, doc in enumerate(doctors[:5], 1):
+                        response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                        response += f"   📋 Specialty: {doc.get('specialty', doc.get('doc_type', 'General Medicine'))}\n"
+                        response += f"   🏥 Department: {doc.get('department', 'General Medicine')}\n"
+                        if doc.get('phone'):
+                            response += f"   📞 Phone: {doc.get('phone')}\n"
+                        if doc.get('email'):
+                            response += f"   ✉️ Email: {doc.get('email')}\n"
+                        if doc.get('experience_years') or doc.get('experience'):
+                            exp = doc.get('experience_years') or doc.get('experience')
+                            response += f"   👨‍⚕️ Experience: {exp} years\n"
+                        if doc.get('rating'):
+                            response += f"   ⭐ Rating: {doc.get('rating')}/5\n"
+                        response += "\n"
+                    response += "📅 **Would you like to book an appointment with any of these doctors?**\n"
+                    response += "Just tell me the doctor's name or number and your preferred date/time!"
+                    
+                    safe_dispatcher.utter_message(text=response)
+                    logging.info(f"Direct doctor query handled: {len(doctors)} doctors shown")
+                    return []
+            
             # STEP 1: Use LLM Router to intelligently route the query
             # This replaces all the hardcoded if/else logic with LLM intelligence
             llm_router = self._get_llm_router()
@@ -1493,6 +1574,8 @@ class AWSBedrockChat(Action):
                     logging.error(f"LLM Router failed: {e}")
                     import traceback
                     logging.error(traceback.format_exc())
+                    # Ensure routing_decision is set to fallback
+                    routing_decision = None
             
             # If LLM Router determined we need data, retrieve it
             if routing_decision and routing_decision.get('needs_data'):
@@ -1535,6 +1618,32 @@ class AWSBedrockChat(Action):
                     except Exception as e:
                         logging.error(f"Error retrieving doctors: {e}")
                         retrieved_context['doctors'] = DatabaseHelper._get_sample_doctors(specialty or 'general medicine')
+                    
+                    # ALWAYS show doctors directly if we have them (don't rely on LLM response generation)
+                    if retrieved_context.get('doctors') and len(retrieved_context['doctors']) > 0:
+                        doctors = retrieved_context['doctors']
+                        specialty_display = parameters.get('specialty_display_name', 'doctor')
+                        response = f"✅ **I found {len(doctors)} {specialty_display}{'s' if len(doctors) > 1 else ''}:**\n\n"
+                        for i, doc in enumerate(doctors[:5], 1):
+                            response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                            response += f"   📋 Specialty: {doc.get('specialty', doc.get('doc_type', 'General Medicine'))}\n"
+                            response += f"   🏥 Department: {doc.get('department', 'General Medicine')}\n"
+                            if doc.get('phone'):
+                                response += f"   📞 Phone: {doc.get('phone')}\n"
+                            if doc.get('email'):
+                                response += f"   ✉️ Email: {doc.get('email')}\n"
+                            if doc.get('experience_years') or doc.get('experience'):
+                                exp = doc.get('experience_years') or doc.get('experience')
+                                response += f"   👨‍⚕️ Experience: {exp} years\n"
+                            if doc.get('rating'):
+                                response += f"   ⭐ Rating: {doc.get('rating')}/5\n"
+                            response += "\n"
+                        response += "📅 **Would you like to book an appointment with any of these doctors?**\n"
+                        response += "Just tell me the doctor's name or number and your preferred date/time!"
+                        
+                        safe_dispatcher.utter_message(text=response)
+                        logging.info(f"LLM Router: Displayed {len(doctors)} doctors directly")
+                        return []
                 
                 elif data_type == 'insurance':
                     try:
@@ -1546,8 +1655,23 @@ class AWSBedrockChat(Action):
                     except Exception as e:
                         logging.error(f"Error retrieving insurance: {e}")
                         retrieved_context['insurance_plans'] = DatabaseHelper._get_sample_insurance_plans()
+                    
+                    # ALWAYS show insurance plans directly
+                    if retrieved_context.get('insurance_plans') and len(retrieved_context['insurance_plans']) > 0:
+                        plans = retrieved_context['insurance_plans']
+                        response = f"✅ **Here are all available insurance plans ({len(plans)}):**\n\n"
+                        for i, plan in enumerate(plans[:5], 1):
+                            response += f"**{i}. {plan.get('name')}**\n"
+                            response += f"   Monthly Premium: ${plan.get('monthly_premium')}\n"
+                            response += f"   Coverage: {plan.get('coverage')}%\n"
+                            response += f"   Deductible: ${plan.get('deductible')}\n\n"
+                        response += "Would you like more details about any specific plan?"
+                        
+                        safe_dispatcher.utter_message(text=response)
+                        logging.info(f"LLM Router: Displayed {len(plans)} insurance plans directly")
+                        return []
                 
-                # Generate response using LLM Router
+                # Generate response using LLM Router (only if we didn't show data directly)
                 if llm_router:
                     try:
                         response = llm_router.generate_response(
