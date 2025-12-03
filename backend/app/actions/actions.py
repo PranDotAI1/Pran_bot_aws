@@ -1164,6 +1164,16 @@ class AWSBedrockChat(Action):
                 self.aws_intelligence = None
         return self.aws_intelligence
     
+    def _get_text_to_sql_agent(self):
+        """Lazy initialization of Text-to-SQL agent"""
+        if self.text_to_sql_agent is None and TextToSQLAgent:
+            try:
+                self.text_to_sql_agent = TextToSQLAgent()
+            except Exception as e:
+                logging.warning(f"Could not initialize Text-to-SQL agent: {e}")
+                self.text_to_sql_agent = None
+        return self.text_to_sql_agent
+    
     def name(self) -> Text:
         return "action_aws_bedrock_chat"
     
