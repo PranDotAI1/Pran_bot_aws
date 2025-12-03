@@ -1282,6 +1282,7 @@ class AWSBedrockChat(Action):
             
             # PRIORITY 0: Direct insurance query handler - MUST be FIRST, before everything else
             # This ensures "I want insurance", "insurance plans", etc. ALWAYS work
+            # CRITICAL: Check this BEFORE any other logic
             has_insurance_word = "insurance" in msg_lower
             has_doctor_word = any(word in msg_lower for word in ["doctor", "physician", "specialist", "medical professional"])
             explicit_insurance_phrases = [
@@ -1294,9 +1295,10 @@ class AWSBedrockChat(Action):
             has_explicit_phrase = any(phrase in msg_lower for phrase in explicit_insurance_phrases)
             is_insurance_query = (has_insurance_word or has_explicit_phrase) and not has_doctor_word
             
-            logging.info(f"PRIORITY 0: Checking insurance query - has_insurance_word={has_insurance_word}, has_doctor_word={has_doctor_word}, has_explicit_phrase={has_explicit_phrase}, is_insurance_query={is_insurance_query}")
+            logging.info(f"PRIORITY 0: Insurance check - msg='{user_message}', has_insurance={has_insurance_word}, has_doctor={has_doctor_word}, explicit={has_explicit_phrase}, is_insurance={is_insurance_query}")
             
             if is_insurance_query:
+                logging.info("PRIORITY 0: INSURANCE QUERY DETECTED - EXECUTING HANDLER")
                 logging.info("PRIORITY 0: Direct insurance query detected - handling immediately")
                 try:
                     insurance_plans = DatabaseHelper.get_insurance_plans()
@@ -1335,16 +1337,22 @@ class AWSBedrockChat(Action):
                         response += "Just tell me the plan name or number!"
                         
                         safe_dispatcher.utter_message(text=response)
-                        logging.info(f"PRIORITY 0: Displayed {len(insurance_plans)} insurance plans - RETURNING []")
-                        return []
+                        logging.info(f"PRIORITY 0: SUCCESS - Displayed {len(insurance_plans)} insurance plans - RETURNING []")
+                        return []  # CRITICAL: Must return here to prevent fallthrough
                     else:
-                        logging.error("PRIORITY 0: No insurance plans available!")
+                        logging.error("PRIORITY 0: ERROR - No insurance plans available!")
+                        # Even if no plans, return a helpful message
+                        safe_dispatcher.utter_message(text="I'm having trouble retrieving insurance plans right now. Please try again in a moment.")
+                        return []
                 except Exception as e:
-                    logging.error(f"PRIORITY 0: Direct insurance handler failed: {e}")
+                    logging.error(f"PRIORITY 0: EXCEPTION in insurance handler: {e}")
                     import traceback
                     logging.error(traceback.format_exc())
+                    # Even on error, return something
+                    safe_dispatcher.utter_message(text="I'm having trouble retrieving insurance plans right now. Please try again in a moment.")
+                    return []
             else:
-                logging.info(f"PRIORITY 0: Not an insurance query, continuing to other handlers")
+                logging.info(f"PRIORITY 0: Not an insurance query (is_insurance={is_insurance_query}), continuing to other handlers")
             
             # Get conversation history for intelligent responses
             conversation_history = []
@@ -3675,24 +3683,43 @@ class ActionInsurancePlans(Action):
             }
         ]
         
-        # Build detailed message
-        message = " **Available Insurance Plans:**\n\n"
-        for i, plan in enumerate(insurance_plans, 1):
-            message += f"**{i}. {plan['name']}**\n"
-            message += f"    Monthly Premium: {plan['monthly_premium']}\n"
-            message += f"    Deductible: {plan['deductible']}\n"
-            message += f"    Coverage: {plan['coverage']}\n"
+        # Build detailed message with same format as action_aws_bedrock_chat
+        message = f"✅ **Here are all available insurance plans ({len(insurance_plans)}):**\n\n"
+        for i, plan in enumerate(insurance_plans[:5], 1):
+            plan_name = plan.get('name') or plan.get('plan_name', 'Insurance Plan')
+            message += f"**{i}. {plan_name}**\n"
+            
+            # Format premium
+            premium = plan.get('monthly_premium', 'N/A')
+            if isinstance(premium, str) and not premium.startswith('$'):
+                premium = f"${premium}"
+            message += f"   💰 Monthly Premium: {premium}\n"
+            
+            # Format coverage
+            coverage = plan.get('coverage', 'N/A')
+            if isinstance(coverage, (int, float)):
+                coverage = f"{int(coverage)}%"
+            elif isinstance(coverage, str) and not coverage.endswith('%'):
+                coverage = f"{coverage}%"
+            message += f"   📊 Coverage: {coverage}\n"
+            
+            # Format deductible
+            deductible = plan.get('deductible', 'N/A')
+            if isinstance(deductible, str) and not deductible.startswith('$'):
+                deductible = f"${deductible}"
+            message += f"   💳 Deductible: {deductible}\n"
+            
+            # Features
             features = plan.get('features', [])
-            if isinstance(features, list):
-                message += f"    Features: {', '.join(features)}\n"
+            if features:
+                if isinstance(features, list):
+                    message += f"   ✨ Features: {', '.join(features[:3])}\n"
+                elif isinstance(features, str):
+                    message += f"   ✨ Features: {features}\n"
             message += "\n"
         
-        message += " **Next Steps:**\n"
-        message += "• Would you like detailed information about any specific plan?\n"
-        message += "• I can provide personalized recommendations based on your needs\n"
-        message += "• I can help you compare plans side-by-side\n"
-        message += "• I can assist with enrollment or questions about coverage\n\n"
-        message += "What would you like to know more about?"
+        message += "📋 **Would you like more details about any specific plan?**\n"
+        message += "Just tell me the plan name or number!"
         
         # Save conversation history
         sender_id = tracker.sender_id
