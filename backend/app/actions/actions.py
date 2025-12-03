@@ -15,6 +15,9 @@ import psycopg2
 import psycopg2.pool
 from datetime import datetime, timedelta
 import logging
+import threading
+import time
+import hashlib
 
 # Import RAG system and AWS Intelligence
 try:
@@ -30,6 +33,74 @@ except ImportError:
 load_dotenv()
 
 REACT_APP_DUMMY_API = os.getenv("REACT_APP_DUMMY_API")
+
+# ============================================================================
+# ROBUST DUPLICATE PREVENTION SYSTEM
+# ============================================================================
+
+class SafeDispatcher:
+    """Wrapper around CollectingDispatcher that prevents duplicate messages"""
+    
+    # Thread-safe response tracking: {sender_id: {response_hash: timestamp}}
+    _response_tracker = {}
+    _lock = threading.Lock()
+    
+    def __init__(self, dispatcher: CollectingDispatcher, sender_id: str, message: str):
+        self.dispatcher = dispatcher
+        self.sender_id = sender_id
+        self.message = message
+        self.sent_messages = []  # Track messages sent in this action execution
+        self.response_count = 0
+        self.max_responses = 1  # Only allow ONE response per action execution
+        
+    def utter_message(self, text: str, **kwargs):
+        """Send message only if not duplicate and within limit"""
+        if not text or not text.strip():
+            return
+        
+        # Create hash of the response
+        response_hash = hashlib.md5(f"{self.sender_id}_{text}".encode()).hexdigest()
+        current_time = time.time()
+        
+        with SafeDispatcher._lock:
+            # Check if this exact response was sent recently (within 10 seconds)
+            if self.sender_id in SafeDispatcher._response_tracker:
+                if response_hash in SafeDispatcher._response_tracker[self.sender_id]:
+                    last_time = SafeDispatcher._response_tracker[self.sender_id][response_hash]
+                    if current_time - last_time < 10:  # 10 second window
+                        logging.warning(f"Duplicate response prevented: '{text[:50]}...' for sender {self.sender_id}")
+                        return
+            
+            # Check if we've already sent max responses in this execution
+            if self.response_count >= self.max_responses:
+                logging.warning(f"Max responses ({self.max_responses}) reached for sender {self.sender_id}, preventing: '{text[:50]}...'")
+                return
+            
+            # Track this response
+            if self.sender_id not in SafeDispatcher._response_tracker:
+                SafeDispatcher._response_tracker[self.sender_id] = {}
+            SafeDispatcher._response_tracker[self.sender_id][response_hash] = current_time
+            
+            # Clean up old entries (older than 60 seconds)
+            for sid in list(SafeDispatcher._response_tracker.keys()):
+                for rhash in list(SafeDispatcher._response_tracker[sid].keys()):
+                    if current_time - SafeDispatcher._response_tracker[sid][rhash] > 60:
+                        del SafeDispatcher._response_tracker[sid][rhash]
+                if not SafeDispatcher._response_tracker[sid]:
+                    del SafeDispatcher._response_tracker[sid]
+        
+        # Send the message
+        try:
+            self.dispatcher.utter_message(text=text, **kwargs)
+            self.sent_messages.append(text)
+            self.response_count += 1
+            logging.info(f"SafeDispatcher: Sent response #{self.response_count} for sender {self.sender_id}: '{text[:50]}...'")
+        except Exception as e:
+            logging.error(f"Error sending message via SafeDispatcher: {e}")
+    
+    def __getattr__(self, name):
+        """Delegate all other attributes to the original dispatcher"""
+        return getattr(self.dispatcher, name)
 
 # Database configuration
 DB_CONFIG = {
@@ -737,9 +808,6 @@ Try asking: What services do you offer? or How do I book an appointment?"""
 class AWSBedrockChat(Action):
     """Super intelligent RAG-powered chatbot with AWS services for conversational responses"""
     
-    # Thread-safe tracking per sender to prevent duplicate responses
-    _processing_messages = {}  # {sender_id: {message_hash: timestamp}}
-    
     def __init__(self):
         # Lazy initialization - only create services when needed
         # This allows simple queries to work even if AWS services fail
@@ -784,40 +852,14 @@ class AWSBedrockChat(Action):
             tracker: Tracker,
             domain: Dict[Text, Any]) -> List[Dict[Text, Any]]:
     
+        # Wrap dispatcher with SafeDispatcher to prevent duplicates
+        user_message = tracker.latest_message.get("text", "")
+        sender_id = tracker.sender_id
+        safe_dispatcher = SafeDispatcher(dispatcher, sender_id, user_message)
+        
         try:
-            # Get user message
-            user_message = tracker.latest_message.get("text", "")
-            sender_id = tracker.sender_id
             msg_lower = user_message.lower()
-            
-            # Create unique message hash to prevent duplicate processing within 5 seconds
-            import hashlib
-            import time
-            message_hash = hashlib.md5(f"{sender_id}_{user_message}_{len(tracker.events)}".encode()).hexdigest()
-            current_time = time.time()
-            
-            # Guard: Prevent duplicate responses for the same message within 5 seconds
-            if sender_id in AWSBedrockChat._processing_messages:
-                if message_hash in AWSBedrockChat._processing_messages[sender_id]:
-                    last_time = AWSBedrockChat._processing_messages[sender_id][message_hash]
-                    if current_time - last_time < 5:  # 5 second window
-                        logging.warning(f"Duplicate call detected for message: '{user_message}' within 5 seconds, skipping")
-                        return []
-            
-            # Mark this message as being processed
-            if sender_id not in AWSBedrockChat._processing_messages:
-                AWSBedrockChat._processing_messages[sender_id] = {}
-            AWSBedrockChat._processing_messages[sender_id][message_hash] = current_time
-            
-            # Clean up old entries (older than 30 seconds) to prevent memory leak
-            for sid in list(AWSBedrockChat._processing_messages.keys()):
-                for mhash in list(AWSBedrockChat._processing_messages[sid].keys()):
-                    if current_time - AWSBedrockChat._processing_messages[sid][mhash] > 30:
-                        del AWSBedrockChat._processing_messages[sid][mhash]
-                if not AWSBedrockChat._processing_messages[sid]:
-                    del AWSBedrockChat._processing_messages[sid]
-            
-            logging.info(f"action_aws_bedrock_chat called with message: '{user_message}'")
+            logging.info(f"action_aws_bedrock_chat called with message: '{user_message}' from sender: {sender_id}")
             
             # Get conversation history for intelligent responses
             conversation_history = []
@@ -865,7 +907,7 @@ class AWSBedrockChat(Action):
                         
                         if not is_error_response:
                             # We got a valid intelligent response! Use it.
-                            dispatcher.utter_message(text=intelligent_response)
+                            safe_dispatcher.utter_message(text=intelligent_response)
                             logging.info(f"action_aws_bedrock_chat returning intelligent response: {intelligent_response[:100]}...")
                             return []
                         else:
@@ -893,7 +935,7 @@ class AWSBedrockChat(Action):
                     else:
                         response = "Hello! How can I help you today?"
                     
-                    dispatcher.utter_message(text=response)
+                    safe_dispatcher.utter_message(text=response)
                     logging.info(f"action_aws_bedrock_chat returning simple response: {response[:100]}...")
                     return []
                 except Exception as e:
@@ -901,7 +943,7 @@ class AWSBedrockChat(Action):
                     import traceback
                     logging.error(traceback.format_exc())
                     try:
-                        dispatcher.utter_message(text="Hello! I'm Dr. AI, your healthcare assistant. How can I help you today?")
+                        safe_dispatcher.utter_message(text="Hello! I'm Dr. AI, your healthcare assistant. How can I help you today?")
                         return []
                     except Exception as e2:
                         logging.error(f"Error in fallback: {e2}")
@@ -1108,7 +1150,33 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                     # Check conversation context to understand what "yes" refers to
                     context_lower = " ".join([msg.get("content", "").lower() for msg in conversation_history[-3:]])
                     
-                    if "doctor" in context_lower or "specialist" in context_lower or "physician" in context_lower:
+                    if "insurance" in context_lower or "plan" in context_lower or "coverage" in context_lower:
+                        # User said yes to insurance - show detailed plans
+                        response = """Here are all available insurance plans with details:
+
+**1. Basic Health Plan**
+   Monthly Premium: $150
+   Deductible: $1,000
+   Coverage: 80%
+   Features: Primary care visits, Emergency visits, Basic prescriptions
+   Best for: Budget-conscious individuals
+
+**2. Premium Health Plan**
+   Monthly Premium: $300
+   Deductible: $500
+   Coverage: 90%
+   Features: All basic features, Specialist visits, Mental health coverage, Dental & Vision
+   Best for: Regular medical needs
+
+**3. Family Health Plan**
+   Monthly Premium: $450
+   Deductible: $750
+   Coverage: 85%
+   Features: All premium features, Family coverage, Maternity care, Pediatric care
+   Best for: Families with children
+
+Would you like more details about any specific plan, or would you like personalized recommendations based on your needs?"""
+                    elif "doctor" in context_lower or "specialist" in context_lower or "physician" in context_lower:
                         # User said yes to finding doctors - actually search for doctors
                         # Check if viral/symptom was mentioned earlier
                         if "viral" in context_lower or "symptom" in context_lower or "suffering" in context_lower:
@@ -1136,8 +1204,6 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                             response = "I'm searching for available doctors. Let me check our database and get back to you with available options. In the meantime, you can also call our appointment line at (555) 123-4567 or visit our website to see all available doctors."
                     elif "appointment" in context_lower or "book" in context_lower or "schedule" in context_lower:
                         response = "Great! To book an appointment, please tell me:\n• Your symptoms or preferred specialty\n• Preferred date and time (if any)\n• Any specific doctor preference\n\nI'll find the right doctor and show you available time slots."
-                    elif "insurance" in context_lower or "plan" in context_lower:
-                        response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
                     else:
                         # Generic yes response
                         response = "I'm here to help! Could you please tell me more about what you need? For example:\n• 'I need to find a doctor'\n• 'I want to book an appointment'\n• 'I need help with insurance'\n• 'I have [symptoms]'\n\nWhat can I help you with?"
@@ -1207,9 +1273,58 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                 # Patient services
                 elif any(word in msg_lower for word in ["patient", "service", "support", "help desk", "customer service", "assistance"]):
                     response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
-                elif any(word in msg_lower for word in ["insurance", "plan", "coverage"]):
-                    # Use intelligent fallback with context
-                    response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+                elif any(word in msg_lower for word in ["insurance", "plan", "coverage", "more about insurance"]):
+                    # Handle insurance queries - show plans or provide recommendations
+                    if "more" in msg_lower and "insurance" in msg_lower:
+                        # User wants more details about insurance
+                        response = """Here are all available insurance plans with detailed information:
+
+**1. Basic Health Plan**
+   Monthly Premium: $150
+   Deductible: $1,000
+   Coverage: 80%
+   Features: 
+   • Primary care visits
+   • Emergency visits
+   • Basic prescriptions
+   • Preventive care
+   Best for: Budget-conscious individuals who want essential coverage
+
+**2. Premium Health Plan**
+   Monthly Premium: $300
+   Deductible: $500
+   Coverage: 90%
+   Features:
+   • All basic features
+   • Specialist visits
+   • Mental health coverage
+   • Dental & Vision
+   • Wellness programs
+   Best for: Regular medical needs with comprehensive coverage
+
+**3. Family Health Plan**
+   Monthly Premium: $450
+   Deductible: $750
+   Coverage: 85%
+   Features:
+   • All premium features
+   • Family coverage (up to 4 members)
+   • Maternity care
+   • Pediatric care
+   • Family wellness programs
+   Best for: Families with children
+
+**Tips for choosing:**
+• Consider your monthly medical expenses
+• Check if your preferred doctors are in-network
+• Review prescription drug coverage
+• Look for wellness program benefits
+• Consider family size and needs
+
+Would you like personalized recommendations based on your specific needs?"""
+                    else:
+                        # Use intelligent fallback with context
+                        response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
                 elif any(word in msg_lower for word in ["appointment", "book", "schedule"]):
                     # Check if specialty is mentioned in appointment request
                     specialty = None
@@ -1332,8 +1447,31 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                         response = f"I understand you're looking for a {specialty_name}. I can help you find one! I can search our database for available {specialty_name}s, show you their specialties and contact information, and help you book an appointment. Would you like me to search for available {specialty_name}s now, or would you prefer to see all available doctors? You can also call our appointment line at (555) 123-4567 for immediate assistance."
                 # Handle "all plans" query specifically
                 elif "all" in msg_lower and "plan" in msg_lower:
-                    # Direct to insurance plans action
-                    response = "I can show you all available insurance plans! Let me retrieve the complete list of insurance plans with details about coverage, premiums, and benefits. Would you like me to show you all available insurance plans?"
+                    # Show all insurance plans with details
+                    response = """Here are all available insurance plans:
+
+**1. Basic Health Plan**
+   Monthly Premium: $150
+   Deductible: $1,000
+   Coverage: 80%
+   Features: Primary care visits, Emergency visits, Basic prescriptions
+   Best for: Budget-conscious individuals
+
+**2. Premium Health Plan**
+   Monthly Premium: $300
+   Deductible: $500
+   Coverage: 90%
+   Features: All basic features, Specialist visits, Mental health coverage, Dental & Vision
+   Best for: Regular medical needs
+
+**3. Family Health Plan**
+   Monthly Premium: $450
+   Deductible: $750
+   Coverage: 85%
+   Features: All premium features, Family coverage, Maternity care, Pediatric care
+   Best for: Families with children
+
+Would you like more details about any specific plan, or would you like personalized recommendations?"""
                 else:
                     # Use intelligent fallback with context (always provides response)
                     response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
@@ -1389,18 +1527,46 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
             # Send response (only once) - ensure response is not empty
             # Response is guaranteed to be set by this point due to fallback logic above
             if response and response.strip():
-                dispatcher.utter_message(text=response)
+                safe_dispatcher.utter_message(text=response)
                 logging.info(f"action_aws_bedrock_chat returning response: {response[:100]}...")
             else:
                 # Last resort fallback - provide helpful response based on message
                 msg_lower = user_message.lower()
                 if any(word in msg_lower for word in ["suffering", "sick", "symptom", "pain", "fever", "cold", "cough", "viral", "infection"]):
                     fallback_response = "I understand you're not feeling well. I can help you find the right doctor based on your symptoms, book an appointment, or provide general health guidance. What specific symptoms are you experiencing?"
-                elif any(word in msg_lower for word in ["yes", "sure", "ok", "please"]):
-                    # Handle "yes" responses intelligently based on context
-                    if previous_topic == "doctor" or "doctor" in msg_lower or "specialist" in msg_lower:
+                elif any(word in msg_lower for word in ["yes", "sure", "ok", "please"]) and len(msg_lower.strip()) < 10:
+                    # Handle "yes" responses intelligently based on conversation context
+                    context_lower = " ".join([msg.get("content", "").lower() for msg in conversation_history[-3:]])
+                    
+                    if "insurance" in context_lower or "plan" in context_lower:
+                        # User said yes to insurance plans - show detailed plans
+                        fallback_response = """Here are all available insurance plans with details:
+
+**1. Basic Health Plan**
+   Monthly Premium: $150
+   Deductible: $1,000
+   Coverage: 80%
+   Features: Primary care visits, Emergency visits, Basic prescriptions
+   Best for: Budget-conscious individuals
+
+**2. Premium Health Plan**
+   Monthly Premium: $300
+   Deductible: $500
+   Coverage: 90%
+   Features: All basic features, Specialist visits, Mental health coverage, Dental & Vision
+   Best for: Regular medical needs
+
+**3. Family Health Plan**
+   Monthly Premium: $450
+   Deductible: $750
+   Coverage: 85%
+   Features: All premium features, Family coverage, Maternity care, Pediatric care
+   Best for: Families with children
+
+Would you like more details about any specific plan, or would you like personalized recommendations based on your needs?"""
+                    elif "doctor" in context_lower or "specialist" in context_lower or "physician" in context_lower:
                         fallback_response = "I can help you find doctors! Let me search for available doctors. What type of doctor or specialty are you looking for? For example, you can say 'general physician', 'gynecologist', 'cardiologist', or 'I need a doctor for [your symptoms]'."
-                    elif previous_topic == "appointment" or "appointment" in msg_lower:
+                    elif "appointment" in context_lower or "book" in context_lower or "schedule" in context_lower:
                         fallback_response = "I can help you book an appointment! Please tell me your symptoms or preferred specialty, and I'll find the right doctor and show you available time slots."
                     else:
                         fallback_response = "I'm here to help! Could you please tell me more about what you need? For example:\n• 'I need to find a doctor'\n• 'I want to book an appointment'\n• 'I need help with insurance'\n• 'I have [symptoms]'\n\nWhat can I help you with?"
@@ -1409,7 +1575,7 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                 else:
                     fallback_response = "I'm here to help with all your healthcare needs - appointments, insurance, health questions, medications, and more. What would you like to know?"
                 
-                dispatcher.utter_message(text=fallback_response)
+                safe_dispatcher.utter_message(text=fallback_response)
                 logging.warning(f"action_aws_bedrock_chat: Response was empty, using fallback: {fallback_response[:50]}...")
             
             return []
@@ -1432,8 +1598,13 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                 else:
                     error_response = "Hello! I'm Dr. AI, your healthcare assistant. I can help with appointments, insurance, health questions, and more. How can I assist you today?"
                 
-                # Always send error response - no guard needed as this is exception handler
-                dispatcher.utter_message(text=error_response)
+                # Always send error response - use safe dispatcher
+                try:
+                    safe_dispatcher = SafeDispatcher(dispatcher, sender_id, user_message)
+                    safe_dispatcher.utter_message(text=error_response)
+                except:
+                    # Last resort - use regular dispatcher if safe dispatcher fails
+                    dispatcher.utter_message(text=error_response)
                 logging.info(f"action_aws_bedrock_chat: Error handled, returning fallback response")
                 return []
             except Exception as e2:
