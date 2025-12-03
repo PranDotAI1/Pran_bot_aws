@@ -19,12 +19,13 @@ import threading
 import time
 import hashlib
 
-# Import RAG system, AWS Intelligence, Text-to-SQL Agent, and Symptom Analyzer
+# Import RAG system, AWS Intelligence, Text-to-SQL Agent, Symptom Analyzer, and LLM Router
 try:
     from .rag_system import RAGRetriever
     from .aws_intelligence import AWSIntelligenceServices
     from .text_to_sql_agent import TextToSQLAgent
     from .symptom_analyzer import SymptomAnalyzer
+    from .llm_router import LLMRouter
 except ImportError:
     # Fallback if relative import doesn't work
     import sys
@@ -39,6 +40,10 @@ except ImportError:
         from symptom_analyzer import SymptomAnalyzer
     except ImportError:
         SymptomAnalyzer = None
+    try:
+        from llm_router import LLMRouter
+    except ImportError:
+        LLMRouter = None
 
 load_dotenv()
 
@@ -1177,6 +1182,7 @@ class AWSBedrockChat(Action):
         self.aws_intelligence = None
         self.text_to_sql_agent = None
         self.symptom_analyzer = None
+        self.llm_router = None
     
     def _get_bedrock_helper(self):
         """Lazy initialization of Bedrock helper"""
@@ -1227,6 +1233,16 @@ class AWSBedrockChat(Action):
                 logging.warning(f"Could not initialize Symptom Analyzer: {e}")
                 self.symptom_analyzer = None
         return self.symptom_analyzer
+    
+    def _get_llm_router(self):
+        """Lazy initialization of LLM Router"""
+        if self.llm_router is None and LLMRouter:
+            try:
+                self.llm_router = LLMRouter()
+            except Exception as e:
+                logging.warning(f"Could not initialize LLM Router: {e}")
+                self.llm_router = None
+        return self.llm_router
     
     def name(self) -> Text:
         return "action_aws_bedrock_chat"
@@ -1443,7 +1459,110 @@ class AWSBedrockChat(Action):
                         logging.info("action_aws_bedrock_chat: Handled generic 'yes' with error fallback")
                         return []
             
-            # Try to use AWS Bedrock for intelligent conversational responses
+            # STEP 1: Use LLM Router to intelligently route the query
+            # This replaces all the hardcoded if/else logic with LLM intelligence
+            llm_router = self._get_llm_router()
+            
+            # First, retrieve basic context for routing decision
+            rag_retriever = self._get_rag_retriever()
+            retrieved_context = {}
+            
+            if rag_retriever:
+                try:
+                    user_id = tracker.get_slot("user_id")
+                    retrieved_context = rag_retriever.retrieve_context(
+                        query=user_message,
+                        user_id=user_id,
+                        patient_id=None
+                    )
+                except Exception as e:
+                    logging.debug(f"RAG retrieval for routing failed: {e}")
+            
+            # Use LLM Router to determine action
+            routing_decision = None
+            if llm_router:
+                try:
+                    routing_decision = llm_router.route_query(
+                        user_message=user_message,
+                        conversation_history=conversation_history,
+                        retrieved_context=retrieved_context,
+                        available_data={}
+                    )
+                    logging.info(f"LLM Router decision: {routing_decision.get('action')} - {routing_decision.get('data_type')}")
+                except Exception as e:
+                    logging.error(f"LLM Router failed: {e}")
+                    import traceback
+                    logging.error(traceback.format_exc())
+            
+            # If LLM Router determined we need data, retrieve it
+            if routing_decision and routing_decision.get('needs_data'):
+                data_type = routing_decision.get('data_type')
+                action = routing_decision.get('action')
+                parameters = routing_decision.get('parameters', {})
+                
+                # Retrieve the required data
+                if data_type == 'doctors':
+                    specialty = parameters.get('specialty')
+                    try:
+                        if specialty:
+                            # Map specialty format
+                            specialty_map = {
+                                'general_medicine': 'general medicine',
+                                'gynecology': 'gynecology',
+                                'cardiology': 'cardiology',
+                                'neurology': 'neurology',
+                                'dermatology': 'dermatology',
+                                'pediatrics': 'pediatrics',
+                                'orthopedics': 'orthopedics',
+                                'psychiatry': 'psychiatry',
+                                'gastroenterology': 'gastroenterology',
+                                'endocrinology': 'endocrinology',
+                                'urology': 'urology',
+                                'ent': 'ent',
+                                'ophthalmology': 'ophthalmology',
+                                'pulmonology': 'pulmonology'
+                            }
+                            db_specialty = specialty_map.get(specialty, specialty)
+                            doctors = DatabaseHelper.get_doctors(specialty=db_specialty)
+                        else:
+                            doctors = DatabaseHelper.get_doctors(limit=10)
+                        
+                        if not doctors or len(doctors) == 0:
+                            doctors = DatabaseHelper._get_sample_doctors(specialty or 'general medicine')
+                        
+                        retrieved_context['doctors'] = doctors
+                        logging.info(f"Retrieved {len(doctors)} doctors for {action}")
+                    except Exception as e:
+                        logging.error(f"Error retrieving doctors: {e}")
+                        retrieved_context['doctors'] = DatabaseHelper._get_sample_doctors(specialty or 'general medicine')
+                
+                elif data_type == 'insurance':
+                    try:
+                        insurance_plans = DatabaseHelper.get_insurance_plans()
+                        if not insurance_plans:
+                            insurance_plans = DatabaseHelper._get_sample_insurance_plans()
+                        retrieved_context['insurance_plans'] = insurance_plans
+                        logging.info(f"Retrieved {len(insurance_plans)} insurance plans")
+                    except Exception as e:
+                        logging.error(f"Error retrieving insurance: {e}")
+                        retrieved_context['insurance_plans'] = DatabaseHelper._get_sample_insurance_plans()
+                
+                # Generate response using LLM Router
+                if llm_router:
+                    try:
+                        response = llm_router.generate_response(
+                            action=action,
+                            data=retrieved_context,
+                            parameters=parameters,
+                            template=routing_decision.get('response_template')
+                        )
+                        safe_dispatcher.utter_message(text=response)
+                        logging.info(f"LLM Router generated response for {action}")
+                        return []
+                    except Exception as e:
+                        logging.error(f"LLM Router response generation failed: {e}")
+            
+            # Fallback: Use AWS Bedrock for intelligent conversational responses
             # This enables super intelligent back-and-forth conversations
             aws_intelligence = self._get_aws_intelligence()
             bedrock_helper = self._get_bedrock_helper()
@@ -1457,10 +1576,10 @@ class AWSBedrockChat(Action):
                     # This works for ALL queries - greetings, questions, everything
                     intelligent_response = aws_intelligence.generate_conversational_response(
                         user_message=user_message,
-                        context={},  # Will be populated below for complex queries
+                        context=retrieved_context,  # Use retrieved context
                         conversation_history=conversation_history,
-                        medical_entities={},  # Will be populated below
-                        sentiment=None  # Will be populated below
+                        medical_entities={},
+                        sentiment=None
                     )
                     
                     # Check if response is an error message - if so, don't use it, use fallback instead
