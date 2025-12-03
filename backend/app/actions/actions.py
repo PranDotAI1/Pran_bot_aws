@@ -91,12 +91,18 @@ class SafeDispatcher:
         
         # Send the message
         try:
+            # Increment response count BEFORE sending to prevent race conditions
+            with SafeDispatcher._lock:
+                self.response_count += 1
+            
             self.dispatcher.utter_message(text=text, **kwargs)
             self.sent_messages.append(text)
-            self.response_count += 1
             logging.info(f"SafeDispatcher: Sent response #{self.response_count} for sender {self.sender_id}: '{text[:50]}...'")
         except Exception as e:
             logging.error(f"Error sending message via SafeDispatcher: {e}")
+            # Rollback response count on error
+            with SafeDispatcher._lock:
+                self.response_count -= 1
     
     def __getattr__(self, name):
         """Delegate all other attributes to the original dispatcher"""
@@ -855,6 +861,25 @@ class AWSBedrockChat(Action):
         # Wrap dispatcher with SafeDispatcher to prevent duplicates
         user_message = tracker.latest_message.get("text", "")
         sender_id = tracker.sender_id
+        
+        # Prevent multiple executions for the same message within 2 seconds
+        message_hash = hashlib.md5(f"{sender_id}_{user_message}".encode()).hexdigest()
+        current_time = time.time()
+        
+        with AWSBedrockChat._execution_lock:
+            if message_hash in AWSBedrockChat._execution_tracker:
+                last_time = AWSBedrockChat._execution_tracker[message_hash]
+                if current_time - last_time < 2:  # 2 second window
+                    logging.warning(f"Preventing duplicate execution for message: '{user_message[:50]}...' from sender {sender_id}")
+                    return []  # Return empty to prevent duplicate execution
+            
+            AWSBedrockChat._execution_tracker[message_hash] = current_time
+            
+            # Clean up old entries (older than 10 seconds)
+            for mhash in list(AWSBedrockChat._execution_tracker.keys()):
+                if current_time - AWSBedrockChat._execution_tracker[mhash] > 10:
+                    del AWSBedrockChat._execution_tracker[mhash]
+        
         safe_dispatcher = SafeDispatcher(dispatcher, sender_id, user_message)
         
         try:
@@ -875,7 +900,120 @@ class AWSBedrockChat(Action):
                         "content": event.get("text", "")
                     })
             
-            # Try to use AWS Bedrock for intelligent conversational responses FIRST
+            # PRIORITY 1: Handle "yes" responses FIRST (before AWS Intelligence)
+            # This ensures "yes" is handled intelligently with database retrieval
+            msg_lower = user_message.lower()
+            if any(word in msg_lower for word in ["yes", "yeah", "yep", "sure", "ok", "okay"]) and len(msg_lower.strip()) < 10:
+                # Check conversation context to understand what "yes" refers to
+                context_lower = " ".join([msg.get("content", "").lower() for msg in conversation_history[-5:]])
+                logging.info(f"Detected 'yes' response, context: {context_lower[:100]}")
+                
+                # Get RAG retriever for database access
+                rag_retriever = self._get_rag_retriever()
+                retrieved_context = {}
+                
+                # Retrieve context from database
+                if rag_retriever:
+                    try:
+                        user_id = tracker.get_slot("user_id")
+                        patient_id = None
+                        if user_id:
+                            try:
+                                patient_info = DatabaseHelper.get_patient_info(user_id=user_id)
+                                if patient_info:
+                                    patient_id = patient_info.get('patient_id')
+                            except:
+                                pass
+                        
+                        retrieved_context = rag_retriever.retrieve_context(
+                            query=user_message,
+                            user_id=user_id,
+                            patient_id=patient_id
+                        )
+                        logging.info(f"RAG retrieved context with {len(retrieved_context)} data types")
+                    except Exception as e:
+                        logging.debug(f"RAG retrieval for yes handling failed: {e}")
+                
+                doctors_from_rag = retrieved_context.get('doctors', []) if retrieved_context else []
+                insurance_plans_from_rag = retrieved_context.get('insurance_plans', []) if retrieved_context else []
+                
+                # Handle "yes" for doctors - check if previous message mentioned doctors
+                if "doctor" in context_lower or "specialist" in context_lower or "physician" in context_lower or "suggest" in context_lower or "search" in context_lower or "available" in context_lower:
+                    logging.info("Handling 'yes' for doctors query")
+                    specialty = None
+                    if "viral" in context_lower or "symptom" in context_lower or "suffering" in context_lower:
+                        specialty = "general medicine"
+                    
+                    doctors = doctors_from_rag
+                    if not doctors and rag_retriever:
+                        try:
+                            doctors = rag_retriever.retrieve_doctors(user_message, specialty=specialty, limit=10)
+                            logging.info(f"RAG retrieved {len(doctors) if doctors else 0} doctors")
+                        except Exception as e:
+                            logging.debug(f"RAG doctor retrieval failed: {e}")
+                    
+                    if not doctors:
+                        try:
+                            doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                            logging.info(f"DatabaseHelper retrieved {len(doctors) if doctors else 0} doctors")
+                        except Exception as e:
+                            logging.debug(f"Could not fetch doctors: {e}")
+                    
+                    if doctors and len(doctors) > 0:
+                        response = f"I found {len(doctors)} doctor(s) available in our database:\n\n"
+                        for i, doc in enumerate(doctors[:5], 1):
+                            response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                            response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                            if doc.get('department'):
+                                response += f"   Department: {doc.get('department')}\n"
+                            if doc.get('phone'):
+                                response += f"   Phone: {doc.get('phone')}\n"
+                            if doc.get('experience_years'):
+                                response += f"   Experience: {doc.get('experience_years')} years\n"
+                            if doc.get('rating'):
+                                response += f"   Rating: {doc.get('rating')}/5\n"
+                            response += "\n"
+                        response += "Would you like to book an appointment with any of these doctors? I can help you schedule a visit!"
+                        safe_dispatcher.utter_message(text=response)
+                        logging.info(f"action_aws_bedrock_chat: Handled 'yes' for doctors, found {len(doctors)} doctors")
+                        return []
+                    else:
+                        # No doctors found, but still provide helpful response
+                        response = "I'm searching our database for available doctors. Let me check and get back to you with available options. In the meantime, you can also call our appointment line at (555) 123-4567 or visit our website to see all available doctors."
+                        safe_dispatcher.utter_message(text=response)
+                        logging.info("action_aws_bedrock_chat: Handled 'yes' for doctors, but no doctors found in database")
+                        return []
+                
+                # Handle "yes" for insurance
+                elif "insurance" in context_lower or "plan" in context_lower or "coverage" in context_lower:
+                    logging.info("Handling 'yes' for insurance query")
+                    insurance_plans = insurance_plans_from_rag
+                    if not insurance_plans:
+                        try:
+                            insurance_plans = DatabaseHelper.get_insurance_plans()
+                        except Exception as e:
+                            logging.debug(f"Could not fetch insurance plans: {e}")
+                    
+                    if insurance_plans and len(insurance_plans) > 0:
+                        response = f"Here are all available insurance plans from our database ({len(insurance_plans)} plans):\n\n"
+                        for i, plan in enumerate(insurance_plans[:5], 1):
+                            response += f"**{i}. {plan.get('name', 'Insurance Plan')}**\n"
+                            response += f"   Monthly Premium: {plan.get('monthly_premium', 'N/A')}\n"
+                            response += f"   Deductible: {plan.get('deductible', 'N/A')}\n"
+                            response += f"   Coverage: {plan.get('coverage', 'N/A')}\n"
+                            features = plan.get('features', [])
+                            if features:
+                                if isinstance(features, list):
+                                    response += f"   Features: {', '.join(features[:3])}\n"
+                                else:
+                                    response += f"   Features: {features}\n"
+                            response += "\n"
+                        response += "Would you like more details about any specific plan, or personalized recommendations based on your needs?"
+                        safe_dispatcher.utter_message(text=response)
+                        logging.info(f"action_aws_bedrock_chat: Handled 'yes' for insurance, found {len(insurance_plans)} plans")
+                        return []
+            
+            # Try to use AWS Bedrock for intelligent conversational responses
             # This enables super intelligent back-and-forth conversations
             aws_intelligence = self._get_aws_intelligence()
             bedrock_helper = self._get_bedrock_helper()
