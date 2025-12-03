@@ -1542,10 +1542,11 @@ class AWSBedrockChat(Action):
             
             # PRIORITY: Handle insurance queries DIRECTLY - always show insurance plans, never generic messages
             # This ensures "insurance", "insurance plans", "help me with insurance" etc. always work
+            # Check insurance FIRST (before doctor queries) to avoid conflicts
             is_insurance_query = any(word in msg_lower for word in [
-                "insurance", "plan", "plans", "coverage", "benefit", "benefits",
+                "insurance", "insurance plan", "insurance plans", "coverage", "benefit", "benefits",
                 "premium", "deductible", "health insurance", "medical insurance"
-            ])
+            ]) and not any(word in msg_lower for word in ["doctor", "physician", "specialist"])  # Don't match if asking about doctors
             
             if is_insurance_query:
                 # ALWAYS retrieve and show insurance plans
