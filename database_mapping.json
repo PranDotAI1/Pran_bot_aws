@@ -1,0 +1,434 @@
+{
+  "appointments": {
+    "columns": [
+      {
+        "name": "appointment_id",
+        "type": "integer",
+        "max_length": null,
+        "nullable": false,
+        "default": "nextval('appointments_appointment_id_seq'::regclass)"
+      },
+      {
+        "name": "patient_id",
+        "type": "integer",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "doctor_id",
+        "type": "integer",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "appointment_date",
+        "type": "date",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "appointment_time",
+        "type": "time without time zone",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "status",
+        "type": "character varying",
+        "max_length": 50,
+        "nullable": true,
+        "default": "'scheduled'::character varying"
+      },
+      {
+        "name": "symptoms",
+        "type": "text",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "notes",
+        "type": "text",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp without time zone",
+        "max_length": null,
+        "nullable": true,
+        "default": "CURRENT_TIMESTAMP"
+      }
+    ],
+    "row_count": 10,
+    "primary_key": "appointment_id",
+    "foreign_keys": [
+      {
+        "column": "doctor_id",
+        "references": "doctors.doctor_id"
+      }
+    ]
+  },
+  "availability_slots": {
+    "columns": [
+      {
+        "name": "slot_id",
+        "type": "integer",
+        "max_length": null,
+        "nullable": false,
+        "default": "nextval('availability_slots_slot_id_seq'::regclass)"
+      },
+      {
+        "name": "doctor_id",
+        "type": "integer",
+        "max_length": null,
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "date",
+        "type": "date",
+        "max_length": null,
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "start_time",
+        "type": "time without time zone",
+        "max_length": null,
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "end_time",
+        "type": "time without time zone",
+        "max_length": null,
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "available",
+        "type": "boolean",
+        "max_length": null,
+        "nullable": true,
+        "default": "true"
+      },
+      {
+        "name": "patient_id",
+        "type": "integer",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      }
+    ],
+    "row_count": 200,
+    "primary_key": "slot_id",
+    "foreign_keys": [
+      {
+        "column": "doctor_id",
+        "references": "doctors.doctor_id"
+      },
+      {
+        "column": "patient_id",
+        "references": "patients.patient_id"
+      }
+    ]
+  },
+  "doctors": {
+    "columns": [
+      {
+        "name": "doctor_id",
+        "type": "integer",
+        "max_length": null,
+        "nullable": false,
+        "default": "nextval('doctors_id_seq'::regclass)"
+      },
+      {
+        "name": "name",
+        "type": "character varying",
+        "max_length": 255,
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "rating",
+        "type": "numeric",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "experience",
+        "type": "integer",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "doc_type",
+        "type": "character varying",
+        "max_length": 255,
+        "nullable": true,
+        "default": "'physician'::character varying"
+      },
+      {
+        "name": "department",
+        "type": "character varying",
+        "max_length": 255,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "email",
+        "type": "character varying",
+        "max_length": 255,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "phone",
+        "type": "character varying",
+        "max_length": 50,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "specialty",
+        "type": "character varying",
+        "max_length": 255,
+        "nullable": true,
+        "default": null
+      }
+    ],
+    "row_count": 23,
+    "primary_key": "doctor_id",
+    "foreign_keys": []
+  },
+  "insurance_plans": {
+    "columns": [
+      {
+        "name": "plan_id",
+        "type": "integer",
+        "max_length": null,
+        "nullable": false,
+        "default": "nextval('insurance_plans_plan_id_seq'::regclass)"
+      },
+      {
+        "name": "plan_name",
+        "type": "character varying",
+        "max_length": 255,
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "monthly_premium",
+        "type": "numeric",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "deductible",
+        "type": "numeric",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "coverage_percentage",
+        "type": "integer",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "features",
+        "type": "ARRAY",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "is_active",
+        "type": "boolean",
+        "max_length": null,
+        "nullable": true,
+        "default": "true"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp without time zone",
+        "max_length": null,
+        "nullable": true,
+        "default": "CURRENT_TIMESTAMP"
+      }
+    ],
+    "row_count": 5,
+    "primary_key": "plan_id",
+    "foreign_keys": []
+  },
+  "medical_records": {
+    "columns": [
+      {
+        "name": "record_id",
+        "type": "integer",
+        "max_length": null,
+        "nullable": false,
+        "default": "nextval('medical_records_record_id_seq'::regclass)"
+      },
+      {
+        "name": "patient_id",
+        "type": "integer",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "doctor_id",
+        "type": "integer",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "record_type",
+        "type": "character varying",
+        "max_length": 100,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "record_date",
+        "type": "date",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "diagnosis",
+        "type": "text",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "treatment",
+        "type": "text",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "notes",
+        "type": "text",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp without time zone",
+        "max_length": null,
+        "nullable": true,
+        "default": "CURRENT_TIMESTAMP"
+      }
+    ],
+    "row_count": 5,
+    "primary_key": "record_id",
+    "foreign_keys": [
+      {
+        "column": "doctor_id",
+        "references": "doctors.doctor_id"
+      }
+    ]
+  },
+  "patients": {
+    "columns": [
+      {
+        "name": "patient_id",
+        "type": "integer",
+        "max_length": null,
+        "nullable": false,
+        "default": "nextval('patients_patient_id_seq'::regclass)"
+      },
+      {
+        "name": "first_name",
+        "type": "character varying",
+        "max_length": 100,
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "last_name",
+        "type": "character varying",
+        "max_length": 100,
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "date_of_birth",
+        "type": "date",
+        "max_length": null,
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "gender",
+        "type": "character varying",
+        "max_length": 10,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "contact_number",
+        "type": "character varying",
+        "max_length": 15,
+        "nullable": false,
+        "default": null
+      },
+      {
+        "name": "email",
+        "type": "character varying",
+        "max_length": 255,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "address",
+        "type": "text",
+        "max_length": null,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "emergency_contact_name",
+        "type": "character varying",
+        "max_length": 100,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "emergency_contact_number",
+        "type": "character varying",
+        "max_length": 15,
+        "nullable": true,
+        "default": null
+      },
+      {
+        "name": "date_registered",
+        "type": "timestamp without time zone",
+        "max_length": null,
+        "nullable": true,
+        "default": "CURRENT_TIMESTAMP"
+      }
+    ],
+    "row_count": 0,
+    "primary_key": "patient_id",
+    "foreign_keys": []
+  }
+}
