@@ -15,6 +15,12 @@ rules:
       - action: action_aws_bedrock_chat
       - action: action_listen
   
+  - rule: Route insurance queries to AWS Bedrock (fallback if not matching specific intent)
+    steps:
+      - intent: nlu_fallback
+      - action: action_aws_bedrock_chat
+      - action: action_listen
+  
   - rule: Handle affirmative responses
     steps:
       - intent: affirm
