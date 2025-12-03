@@ -19,16 +19,21 @@ import threading
 import time
 import hashlib
 
-# Import RAG system and AWS Intelligence
+# Import RAG system, AWS Intelligence, and Text-to-SQL Agent
 try:
     from .rag_system import RAGRetriever
     from .aws_intelligence import AWSIntelligenceServices
+    from .text_to_sql_agent import TextToSQLAgent
 except ImportError:
     # Fallback if relative import doesn't work
     import sys
     sys.path.append(os.path.dirname(__file__))
     from rag_system import RAGRetriever
     from aws_intelligence import AWSIntelligenceServices
+    try:
+        from text_to_sql_agent import TextToSQLAgent
+    except ImportError:
+        TextToSQLAgent = None
 
 load_dotenv()
 
@@ -1127,6 +1132,7 @@ class AWSBedrockChat(Action):
         self.bedrock_helper = None
         self.rag_retriever = None
         self.aws_intelligence = None
+        self.text_to_sql_agent = None
     
     def _get_bedrock_helper(self):
         """Lazy initialization of Bedrock helper"""
@@ -1452,55 +1458,107 @@ class AWSBedrockChat(Action):
             retrieved_context = {}
             context_string = ""
             
+            # ENHANCED: Use Text-to-SQL Agent for intelligent database queries
+            text_to_sql = self._get_text_to_sql_agent()
+            
             # Always try to retrieve context from database for intelligent responses
             if rag_retriever:
                 try:
-                    # Retrieve context using RAG system
-                    retrieved_context = rag_retriever.retrieve_context(
-                        query=user_message,
-                        user_id=user_id,
-                        patient_id=patient_id
-                    )
-                    
-                    # Also retrieve specific data based on query type
-                    msg_lower = user_message.lower()
-                    
-                    # If query mentions doctors, retrieve doctors from database
-                    if any(word in msg_lower for word in ["doctor", "physician", "specialist", "suggest", "find", "list"]):
+                    # STEP 1: Use Text-to-SQL Agent to understand query and generate SQL
+                    sql_result = None
+                    if text_to_sql:
                         try:
-                            doctors = rag_retriever.retrieve_doctors(user_message, limit=10)
-                            if doctors:
-                                retrieved_context['doctors'] = doctors
-                                logging.info(f"RAG: Retrieved {len(doctors)} doctors from database")
+                            # Understand query intent first
+                            intent_result = text_to_sql.understand_query_intent(user_message)
+                            logging.info(f"Text-to-SQL Intent: {intent_result.get('intent')}, Entities: {intent_result.get('entities')}")
+                            
+                            # Generate SQL if it's a database query
+                            if intent_result.get('intent') in ['find_doctors', 'find_insurance', 'check_availability', 'book_appointment', 'get_medical_records']:
+                                sql_result = text_to_sql.generate_sql(user_message, context=intent_result)
+                                if sql_result:
+                                    logging.info(f"Text-to-SQL generated SQL for table: {sql_result.get('table')}")
+                                    
+                                    # Execute SQL if we have a connection
+                                    db_conn = DatabaseHelper.get_connection()
+                                    if db_conn and sql_result.get('sql'):
+                                        try:
+                                            sql_data = text_to_sql.execute_sql_safely(
+                                                sql_result['sql'],
+                                                sql_result.get('parameters', {}),
+                                                db_conn
+                                            )
+                                            
+                                            # Map SQL results to retrieved_context
+                                            table = sql_result.get('table', '')
+                                            if table == 'doctors' and sql_data:
+                                                retrieved_context['doctors'] = sql_data
+                                                logging.info(f"Text-to-SQL: Retrieved {len(sql_data)} doctors")
+                                            elif table == 'insurance_plans' and sql_data:
+                                                retrieved_context['insurance_plans'] = sql_data
+                                                logging.info(f"Text-to-SQL: Retrieved {len(sql_data)} insurance plans")
+                                            elif table == 'availability_slots' and sql_data:
+                                                retrieved_context['appointments'] = sql_data  # Map slots to appointments
+                                                logging.info(f"Text-to-SQL: Retrieved {len(sql_data)} availability slots")
+                                            
+                                            DatabaseHelper.return_connection(db_conn)
+                                        except Exception as e:
+                                            logging.error(f"Error executing Text-to-SQL query: {e}")
+                                            DatabaseHelper.return_connection(db_conn)
                         except Exception as e:
-                            logging.debug(f"RAG doctor retrieval failed: {e}")
+                            logging.error(f"Text-to-SQL agent failed: {e}")
+                            import traceback
+                            logging.error(traceback.format_exc())
                     
-                    # If query mentions insurance, retrieve insurance plans from database
-                    if any(word in msg_lower for word in ["insurance", "plan", "coverage", "benefit"]):
-                        try:
-                            insurance_plans = DatabaseHelper.get_insurance_plans()
-                            if insurance_plans:
-                                retrieved_context['insurance_plans'] = insurance_plans
-                                logging.info(f"RAG: Retrieved {len(insurance_plans)} insurance plans from database")
-                        except Exception as e:
-                            logging.debug(f"RAG insurance retrieval failed: {e}")
-                    
-                    # If query mentions appointments, retrieve appointments from database
-                    if any(word in msg_lower for word in ["appointment", "book", "schedule"]):
-                        try:
-                            if patient_id:
-                                appointments = rag_retriever.retrieve_appointments(patient_id=patient_id, limit=10)
-                                if appointments:
-                                    retrieved_context['appointments'] = appointments
-                                    logging.info(f"RAG: Retrieved {len(appointments)} appointments from database")
-                        except Exception as e:
-                            logging.debug(f"RAG appointment retrieval failed: {e}")
+                    # STEP 2: Fallback to traditional RAG if Text-to-SQL didn't return data
+                    if not any(retrieved_context.values()):
+                        # Retrieve context using RAG system
+                        retrieved_context = rag_retriever.retrieve_context(
+                            query=user_message,
+                            user_id=user_id,
+                            patient_id=patient_id
+                        )
+                        
+                        # Also retrieve specific data based on query type
+                        msg_lower = user_message.lower()
+                        
+                        # If query mentions doctors, retrieve doctors from database
+                        if any(word in msg_lower for word in ["doctor", "physician", "specialist", "suggest", "find", "list"]):
+                            try:
+                                doctors = rag_retriever.retrieve_doctors(user_message, limit=10)
+                                if doctors:
+                                    retrieved_context['doctors'] = doctors
+                                    logging.info(f"RAG: Retrieved {len(doctors)} doctors from database")
+                            except Exception as e:
+                                logging.debug(f"RAG doctor retrieval failed: {e}")
+                        
+                        # If query mentions insurance, retrieve insurance plans from database
+                        if any(word in msg_lower for word in ["insurance", "plan", "coverage", "benefit"]):
+                            try:
+                                insurance_plans = DatabaseHelper.get_insurance_plans()
+                                if insurance_plans:
+                                    retrieved_context['insurance_plans'] = insurance_plans
+                                    logging.info(f"RAG: Retrieved {len(insurance_plans)} insurance plans from database")
+                            except Exception as e:
+                                logging.debug(f"RAG insurance retrieval failed: {e}")
+                        
+                        # If query mentions appointments, retrieve appointments from database
+                        if any(word in msg_lower for word in ["appointment", "book", "schedule"]):
+                            try:
+                                if patient_id:
+                                    appointments = rag_retriever.retrieve_appointments(patient_id=patient_id, limit=10)
+                                    if appointments:
+                                        retrieved_context['appointments'] = appointments
+                                        logging.info(f"RAG: Retrieved {len(appointments)} appointments from database")
+                            except Exception as e:
+                                logging.debug(f"RAG appointment retrieval failed: {e}")
                     
                     # Format context for LLM
                     context_string = rag_retriever.format_context_for_llm(retrieved_context)
                     logging.info(f"RAG: Retrieved context with {len(retrieved_context)} data types")
                 except Exception as e:
-                    logging.debug(f"RAG retrieval failed: {e}")
+                    logging.error(f"RAG retrieval failed: {e}")
+                    import traceback
+                    logging.error(traceback.format_exc())
                     # Continue without RAG context - bot will still work
             
             # Get detected intent and entities for context
