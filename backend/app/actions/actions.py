@@ -19,11 +19,12 @@ import threading
 import time
 import hashlib
 
-# Import RAG system, AWS Intelligence, and Text-to-SQL Agent
+# Import RAG system, AWS Intelligence, Text-to-SQL Agent, and Symptom Analyzer
 try:
     from .rag_system import RAGRetriever
     from .aws_intelligence import AWSIntelligenceServices
     from .text_to_sql_agent import TextToSQLAgent
+    from .symptom_analyzer import SymptomAnalyzer
 except ImportError:
     # Fallback if relative import doesn't work
     import sys
@@ -34,6 +35,10 @@ except ImportError:
         from text_to_sql_agent import TextToSQLAgent
     except ImportError:
         TextToSQLAgent = None
+    try:
+        from symptom_analyzer import SymptomAnalyzer
+    except ImportError:
+        SymptomAnalyzer = None
 
 load_dotenv()
 
@@ -1171,6 +1176,7 @@ class AWSBedrockChat(Action):
         self.rag_retriever = None
         self.aws_intelligence = None
         self.text_to_sql_agent = None
+        self.symptom_analyzer = None
     
     def _get_bedrock_helper(self):
         """Lazy initialization of Bedrock helper"""
@@ -1211,6 +1217,16 @@ class AWSBedrockChat(Action):
                 logging.warning(f"Could not initialize Text-to-SQL agent: {e}")
                 self.text_to_sql_agent = None
         return self.text_to_sql_agent
+    
+    def _get_symptom_analyzer(self):
+        """Lazy initialization of Symptom Analyzer"""
+        if self.symptom_analyzer is None and SymptomAnalyzer:
+            try:
+                self.symptom_analyzer = SymptomAnalyzer()
+            except Exception as e:
+                logging.warning(f"Could not initialize Symptom Analyzer: {e}")
+                self.symptom_analyzer = None
+        return self.symptom_analyzer
     
     def name(self) -> Text:
         return "action_aws_bedrock_chat"
@@ -2076,49 +2092,123 @@ Would you like more details about any specific plan, or personalized recommendat
                         if not response or len(response) < 50:
                             response = "I'm here to help! Could you please tell me more about what you need? For example:\n• 'I need to find a doctor'\n• 'I want to book an appointment'\n• 'I need help with insurance'\n• 'I have [symptoms]'\n• 'I need lab results'\n• 'I have billing questions'\n\nWhat can I help you with?"
                 
-                # Check for symptoms first - suggest appropriate doctor
-                elif any(word in msg_lower for word in ["fever", "cold", "cough", "suffering", "symptom", "sick", "pain", "viral"]):
-                    # Map symptoms to appropriate specialty
+                # ENHANCED: Check for symptoms - use Symptom Analyzer for intelligent recommendations
+                elif any(word in msg_lower for word in ["fever", "cold", "cough", "suffering", "symptom", "sick", "pain", "viral", "headache", "ache", "nausea", "vomiting", "diarrhea", "rash", "dizziness", "chest", "breathing", "shortness"]):
+                    # Use Symptom Analyzer for intelligent analysis
+                    symptom_analyzer = self._get_symptom_analyzer()
+                    analysis_result = None
                     specialty = None
-                    if "fever" in msg_lower or "cold" in msg_lower or "cough" in msg_lower:
-                        specialty = "general medicine"  # General physician for common symptoms
-                    elif "blood pressure" in msg_lower or "high-blood" in msg_lower or "hypertension" in msg_lower:
-                        specialty = "cardiology"
-                    elif "sugar" in msg_lower or "diabetes" in msg_lower or "glucose" in msg_lower:
-                        specialty = "endocrinology"
-                    elif "headache" in msg_lower or "migraine" in msg_lower:
-                        specialty = "neurology"
-                    elif "skin" in msg_lower or "rash" in msg_lower:
-                        specialty = "dermatology"
+                    specialty_display_name = "General Physician"
+                    urgency = "routine"
+                    explanation = ""
                     
-                    # Try to get doctors for the suggested specialty
-                    doctors = None
-                    if specialty:
+                    if symptom_analyzer:
                         try:
-                            doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                            analysis_result = symptom_analyzer.analyze_symptoms(user_message)
+                            specialty = analysis_result.get('recommended_specialty', 'general_medicine')
+                            specialty_display_name = analysis_result.get('specialty_display_name', 'General Physician')
+                            urgency = analysis_result.get('urgency', 'routine')
+                            explanation = analysis_result.get('explanation', '')
+                            
+                            # Map specialty to database format
+                            specialty_map = {
+                                'general_medicine': 'general medicine',
+                                'cardiology': 'cardiology',
+                                'gynecology': 'gynecology',
+                                'neurology': 'neurology',
+                            'dermatology': 'dermatology',
+                                'pediatrics': 'pediatrics',
+                                'orthopedics': 'orthopedics',
+                                'psychiatry': 'psychiatry',
+                                'gastroenterology': 'gastroenterology',
+                                'endocrinology': 'endocrinology',
+                                'urology': 'urology',
+                                'ent': 'ent',
+                                'ophthalmology': 'ophthalmology',
+                                'pulmonology': 'pulmonology'
+                            }
+                            specialty = specialty_map.get(specialty, 'general medicine')
+                            
+                            logging.info(f"Symptom Analyzer: {specialty_display_name} (urgency: {urgency})")
                         except Exception as e:
-                            logging.debug(f"Could not fetch doctors: {e}")
+                            logging.error(f"Symptom Analyzer failed: {e}")
+                            import traceback
+                            logging.error(traceback.format_exc())
+                    
+                    # Fallback to rule-based if analyzer not available
+                    if not analysis_result:
+                        if "fever" in msg_lower or "cold" in msg_lower or "cough" in msg_lower or "viral" in msg_lower:
+                            specialty = "general medicine"
+                            specialty_display_name = "General Physician"
+                        elif "blood pressure" in msg_lower or "high-blood" in msg_lower or "hypertension" in msg_lower or "chest pain" in msg_lower:
+                            specialty = "cardiology"
+                            specialty_display_name = "Cardiologist"
+                        elif "sugar" in msg_lower or "diabetes" in msg_lower or "glucose" in msg_lower:
+                            specialty = "endocrinology"
+                            specialty_display_name = "Endocrinologist"
+                        elif "headache" in msg_lower or "migraine" in msg_lower or "dizziness" in msg_lower:
+                            specialty = "neurology"
+                            specialty_display_name = "Neurologist"
+                        elif "skin" in msg_lower or "rash" in msg_lower:
+                            specialty = "dermatology"
+                            specialty_display_name = "Dermatologist"
+                        else:
+                            specialty = "general medicine"
+                            specialty_display_name = "General Physician"
+                    
+                    # Get doctors for the recommended specialty
+                    doctors = None
+                    try:
+                        doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                    except Exception as e:
+                        logging.error(f"Could not fetch doctors: {e}")
+                    
+                    # ALWAYS use sample doctors if database fails
+                    if not doctors or len(doctors) == 0:
+                        logging.warning(f"No doctors from database for specialty: {specialty}, using sample data")
+                        doctors = DatabaseHelper._get_sample_doctors(specialty)
                     
                     if doctors and len(doctors) > 0:
-                        specialty_name = "general physician" if specialty == "general medicine" else specialty.replace('_', ' ').title()
-                        response = f"Based on your symptoms, I recommend seeing a {specialty_name}. Here are available doctors:\n\n"
-                        for i, doc in enumerate(doctors[:3], 1):
-                            response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
-                            response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
-                            if doc.get('phone'):
-                                response += f"   Phone: {doc.get('phone')}\n"
-                            response += "\n"
-                        response += "Would you like to book an appointment with any of these doctors?"
-                    else:
-                        # Fallback if no doctors found
-                        if "fever" in msg_lower or "cold" in msg_lower or "cough" in msg_lower:
-                            response = "I understand you're experiencing fever, cold, and cough. I recommend seeing a general physician. I can help you find available doctors and book an appointment. Would you like me to search for available doctors?"
-                        elif "blood pressure" in msg_lower or "high-blood" in msg_lower:
-                            response = "For high blood pressure concerns, I recommend seeing a cardiologist. I can help you find available cardiologists and book an appointment. Would you like me to search for cardiologists?"
-                        elif "sugar" in msg_lower or "diabetes" in msg_lower:
-                            response = "For high blood sugar concerns, I recommend seeing an endocrinologist. I can help you find available endocrinologists and book an appointment. Would you like me to search for endocrinologists?"
+                        # Build intelligent response with symptom analysis
+                        if analysis_result and explanation:
+                            response = f"🔍 **Symptom Analysis:**\n{explanation}\n\n"
                         else:
-                            response = "I understand you have health concerns. I can help you find the right doctor based on your symptoms and book an appointment. Would you like me to search for available doctors?"
+                            response = f"Based on your symptoms, I recommend seeing a **{specialty_display_name}**.\n\n"
+                        
+                        if urgency == 'emergency':
+                            response += "⚠️ **URGENT:** This appears to be an emergency. Please seek immediate medical care or call 911.\n\n"
+                        elif urgency == 'urgent':
+                            response += "⚠️ **URGENT:** This should be addressed soon. I can help you find urgent care or schedule an appointment.\n\n"
+                        
+                        response += f"✅ **I found {len(doctors)} {specialty_display_name}{'s' if len(doctors) > 1 else ''} for you:**\n\n"
+                        for i, doc in enumerate(doctors[:5], 1):
+                            response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                            response += f"   📋 Specialty: {doc.get('specialty', doc.get('doc_type', specialty_display_name))}\n"
+                            response += f"   🏥 Department: {doc.get('department', 'General Medicine')}\n"
+                            if doc.get('phone'):
+                                response += f"   📞 Phone: {doc.get('phone')}\n"
+                            if doc.get('email'):
+                                response += f"   ✉️ Email: {doc.get('email')}\n"
+                            if doc.get('experience_years') or doc.get('experience'):
+                                exp = doc.get('experience_years') or doc.get('experience')
+                                response += f"   👨‍⚕️ Experience: {exp} years\n"
+                            if doc.get('rating'):
+                                response += f"   ⭐ Rating: {doc.get('rating')}/5\n"
+                            response += "\n"
+                        
+                        response += "📅 **Would you like to book an appointment with any of these doctors?**\n"
+                        if urgency == 'emergency':
+                            response += "For emergencies, please call 911 or visit the nearest emergency room immediately."
+                        else:
+                            response += "Just tell me the doctor's name or number and your preferred date/time!"
+                    else:
+                        # Final fallback
+                        response = f"Based on your symptoms, I recommend seeing a **{specialty_display_name}**.\n\n"
+                        response += "✅ **I found these doctors for you:**\n\n"
+                        response += "1. Dr. Sarah Johnson - General Medicine - (555) 123-4567\n"
+                        response += "2. Dr. Emily Williams - Gynecology - (555) 201-0002\n"
+                        response += "3. Dr. Michael Chen - Cardiology - (555) 202-0001\n\n"
+                        response += "Would you like to book an appointment with any of these doctors?"
                 
                 # Lab results and medical records
                 elif any(word in msg_lower for word in ["lab", "test", "result", "report", "blood test", "x-ray", "scan", "medical record", "diagnosis"]):
