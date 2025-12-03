@@ -737,9 +737,8 @@ Try asking: What services do you offer? or How do I book an appointment?"""
 class AWSBedrockChat(Action):
     """Super intelligent RAG-powered chatbot with AWS services for conversational responses"""
     
-    # Class-level tracking to prevent duplicate responses
-    _last_message_id = None
-    _last_response_sent = False
+    # Thread-safe tracking per sender to prevent duplicate responses
+    _processing_messages = {}  # {sender_id: {message_hash: timestamp}}
     
     def __init__(self):
         # Lazy initialization - only create services when needed
@@ -791,17 +790,32 @@ class AWSBedrockChat(Action):
             sender_id = tracker.sender_id
             msg_lower = user_message.lower()
             
-            # Create unique message ID to prevent duplicate processing
-            message_id = f"{sender_id}_{user_message}_{len(tracker.events)}"
+            # Create unique message hash to prevent duplicate processing within 5 seconds
+            import hashlib
+            import time
+            message_hash = hashlib.md5(f"{sender_id}_{user_message}_{len(tracker.events)}".encode()).hexdigest()
+            current_time = time.time()
             
-            # Guard: Prevent duplicate responses for the same message
-            if AWSBedrockChat._last_message_id == message_id and AWSBedrockChat._last_response_sent:
-                logging.warning(f"Duplicate call detected for message: '{user_message}', skipping")
-                return []
+            # Guard: Prevent duplicate responses for the same message within 5 seconds
+            if sender_id in AWSBedrockChat._processing_messages:
+                if message_hash in AWSBedrockChat._processing_messages[sender_id]:
+                    last_time = AWSBedrockChat._processing_messages[sender_id][message_hash]
+                    if current_time - last_time < 5:  # 5 second window
+                        logging.warning(f"Duplicate call detected for message: '{user_message}' within 5 seconds, skipping")
+                        return []
             
             # Mark this message as being processed
-            AWSBedrockChat._last_message_id = message_id
-            AWSBedrockChat._last_response_sent = False
+            if sender_id not in AWSBedrockChat._processing_messages:
+                AWSBedrockChat._processing_messages[sender_id] = {}
+            AWSBedrockChat._processing_messages[sender_id][message_hash] = current_time
+            
+            # Clean up old entries (older than 30 seconds) to prevent memory leak
+            for sid in list(AWSBedrockChat._processing_messages.keys()):
+                for mhash in list(AWSBedrockChat._processing_messages[sid].keys()):
+                    if current_time - AWSBedrockChat._processing_messages[sid][mhash] > 30:
+                        del AWSBedrockChat._processing_messages[sid][mhash]
+                if not AWSBedrockChat._processing_messages[sid]:
+                    del AWSBedrockChat._processing_messages[sid]
             
             logging.info(f"action_aws_bedrock_chat called with message: '{user_message}'")
             
@@ -1062,8 +1076,74 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                     else:
                         response = "I can help you find a general physician! I can search our database for available general practitioners, show you their contact information, and help you book an appointment. Would you like me to search for available general physicians now?"
                 
+                # Handle "suggest doctors" or "show doctors" queries
+                elif any(word in msg_lower for word in ["suggest", "show", "find", "list"]) and any(word in msg_lower for word in ["doctor", "doctors", "specialist", "physician"]):
+                    # User wants to see doctors - search for them
+                    specialty = None
+                    # Check if viral/symptom was mentioned
+                    if "viral" in msg_lower or "symptom" in msg_lower or "suffering" in msg_lower:
+                        specialty = "general medicine"
+                    
+                    doctors = None
+                    try:
+                        doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                    except Exception as e:
+                        logging.debug(f"Could not fetch doctors: {e}")
+                    
+                    if doctors and len(doctors) > 0:
+                        response = f"I found {len(doctors)} doctor(s) available:\n\n"
+                        for i, doc in enumerate(doctors[:5], 1):
+                            response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                            response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                            response += f"   Department: {doc.get('department', 'General Medicine')}\n"
+                            if doc.get('phone'):
+                                response += f"   Phone: {doc.get('phone')}\n"
+                            response += "\n"
+                        response += "Would you like to book an appointment with any of these doctors?"
+                    else:
+                        response = "I'm searching for available doctors. Let me check our database and get back to you with available options. In the meantime, you can also call our appointment line at (555) 123-4567 or visit our website to see all available doctors."
+                
+                # Handle "yes" responses intelligently based on conversation context
+                elif any(word in msg_lower for word in ["yes", "yeah", "yep", "sure", "ok", "okay"]) and len(msg_lower.strip()) < 10:
+                    # Check conversation context to understand what "yes" refers to
+                    context_lower = " ".join([msg.get("content", "").lower() for msg in conversation_history[-3:]])
+                    
+                    if "doctor" in context_lower or "specialist" in context_lower or "physician" in context_lower:
+                        # User said yes to finding doctors - actually search for doctors
+                        # Check if viral/symptom was mentioned earlier
+                        if "viral" in context_lower or "symptom" in context_lower or "suffering" in context_lower:
+                            specialty = "general medicine"  # General physician for viral/symptoms
+                        else:
+                            specialty = None  # Search all doctors
+                        
+                        doctors = None
+                        try:
+                            doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                        except Exception as e:
+                            logging.debug(f"Could not fetch doctors: {e}")
+                        
+                        if doctors and len(doctors) > 0:
+                            response = f"I found {len(doctors)} doctor(s) available:\n\n"
+                            for i, doc in enumerate(doctors[:5], 1):
+                                response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                                response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                                response += f"   Department: {doc.get('department', 'General Medicine')}\n"
+                                if doc.get('phone'):
+                                    response += f"   Phone: {doc.get('phone')}\n"
+                                response += "\n"
+                            response += "Would you like to book an appointment with any of these doctors?"
+                        else:
+                            response = "I'm searching for available doctors. Let me check our database and get back to you with available options. In the meantime, you can also call our appointment line at (555) 123-4567 or visit our website to see all available doctors."
+                    elif "appointment" in context_lower or "book" in context_lower or "schedule" in context_lower:
+                        response = "Great! To book an appointment, please tell me:\n• Your symptoms or preferred specialty\n• Preferred date and time (if any)\n• Any specific doctor preference\n\nI'll find the right doctor and show you available time slots."
+                    elif "insurance" in context_lower or "plan" in context_lower:
+                        response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+                    else:
+                        # Generic yes response
+                        response = "I'm here to help! Could you please tell me more about what you need? For example:\n• 'I need to find a doctor'\n• 'I want to book an appointment'\n• 'I need help with insurance'\n• 'I have [symptoms]'\n\nWhat can I help you with?"
+                
                 # Check for symptoms first - suggest appropriate doctor
-                elif any(word in msg_lower for word in ["fever", "cold", "cough", "suffering", "symptom", "sick", "pain"]):
+                elif any(word in msg_lower for word in ["fever", "cold", "cough", "suffering", "symptom", "sick", "pain", "viral"]):
                     # Map symptoms to appropriate specialty
                     specialty = None
                     if "fever" in msg_lower or "cold" in msg_lower or "cough" in msg_lower:
@@ -1307,27 +1387,29 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                 pass  # Ignore errors - non-critical
             
             # Send response (only once) - ensure response is not empty
-            # Double-check guard to prevent duplicates
-            if AWSBedrockChat._last_response_sent:
-                logging.warning(f"Response already sent for message: '{user_message}', skipping duplicate")
-                return []
-            
+            # Response is guaranteed to be set by this point due to fallback logic above
             if response and response.strip():
                 dispatcher.utter_message(text=response)
-                AWSBedrockChat._last_response_sent = True
                 logging.info(f"action_aws_bedrock_chat returning response: {response[:100]}...")
             else:
                 # Last resort fallback - provide helpful response based on message
                 msg_lower = user_message.lower()
                 if any(word in msg_lower for word in ["suffering", "sick", "symptom", "pain", "fever", "cold", "cough", "viral", "infection"]):
                     fallback_response = "I understand you're not feeling well. I can help you find the right doctor based on your symptoms, book an appointment, or provide general health guidance. What specific symptoms are you experiencing?"
+                elif any(word in msg_lower for word in ["yes", "sure", "ok", "please"]):
+                    # Handle "yes" responses intelligently based on context
+                    if previous_topic == "doctor" or "doctor" in msg_lower or "specialist" in msg_lower:
+                        fallback_response = "I can help you find doctors! Let me search for available doctors. What type of doctor or specialty are you looking for? For example, you can say 'general physician', 'gynecologist', 'cardiologist', or 'I need a doctor for [your symptoms]'."
+                    elif previous_topic == "appointment" or "appointment" in msg_lower:
+                        fallback_response = "I can help you book an appointment! Please tell me your symptoms or preferred specialty, and I'll find the right doctor and show you available time slots."
+                    else:
+                        fallback_response = "I'm here to help! Could you please tell me more about what you need? For example:\n• 'I need to find a doctor'\n• 'I want to book an appointment'\n• 'I need help with insurance'\n• 'I have [symptoms]'\n\nWhat can I help you with?"
                 elif any(word in msg_lower for word in ["help", "assist", "how can you", "what can you"]):
                     fallback_response = "I'm Dr. AI, your healthcare assistant! I can help you with finding doctors, booking appointments, health questions, insurance information, and more. What would you like help with today?"
                 else:
                     fallback_response = "I'm here to help with all your healthcare needs - appointments, insurance, health questions, medications, and more. What would you like to know?"
                 
                 dispatcher.utter_message(text=fallback_response)
-                AWSBedrockChat._last_response_sent = True
                 logging.warning(f"action_aws_bedrock_chat: Response was empty, using fallback: {fallback_response[:50]}...")
             
             return []
@@ -1350,11 +1432,9 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                 else:
                     error_response = "Hello! I'm Dr. AI, your healthcare assistant. I can help with appointments, insurance, health questions, and more. How can I assist you today?"
                 
-                # Guard: Only send error response if not already sent
-                if not AWSBedrockChat._last_response_sent:
-                    dispatcher.utter_message(text=error_response)
-                    AWSBedrockChat._last_response_sent = True
-                    logging.info(f"action_aws_bedrock_chat: Error handled, returning fallback response")
+                # Always send error response - no guard needed as this is exception handler
+                dispatcher.utter_message(text=error_response)
+                logging.info(f"action_aws_bedrock_chat: Error handled, returning fallback response")
                 return []
             except Exception as e2:
                 logging.error(f"Error in final fallback: {e2}")
