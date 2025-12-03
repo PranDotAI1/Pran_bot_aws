@@ -190,7 +190,7 @@ class DatabaseHelper:
             # Try to get from database, fallback to default if table doesn't exist
             try:
                 cursor.execute("""
-                    SELECT plan_name, monthly_premium, deductible, coverage_percentage, features
+                    SELECT plan_id, plan_name, monthly_premium, deductible, coverage_percentage, features
                     FROM insurance_plans
                     WHERE is_active = true
                     ORDER BY monthly_premium
@@ -198,13 +198,25 @@ class DatabaseHelper:
                 """)
                 plans = cursor.fetchall()
                 if plans:
-                    return [{
-                        'name': p[0],
-                        'monthly_premium': f"${p[1]}",
-                        'deductible': f"${p[2]}",
-                        'coverage': f"{p[3]}%",
-                        'features': p[4] if isinstance(p[4], list) else p[4].split(',') if p[4] else []
-                    } for p in plans]
+                    result = []
+                    for p in plans:
+                        features = p[5] if len(p) > 5 and p[5] else []
+                        if isinstance(features, str):
+                            # Handle PostgreSQL array format
+                            features = features.strip('{}').split(',') if features else []
+                        elif not isinstance(features, list):
+                            features = []
+                        
+                        result.append({
+                            'plan_id': p[0],
+                            'name': p[1],
+                            'monthly_premium': f"${float(p[2]):.2f}" if p[2] else "$0",
+                            'deductible': f"${float(p[3]):.2f}" if p[3] else "$0",
+                            'coverage': f"{int(p[4])}%" if p[4] else "0%",
+                            'features': features
+                        })
+                    logging.info(f"Retrieved {len(result)} insurance plans from database")
+                    return result
             except Exception as e:
                 # Table doesn't exist or query failed, return None to use fallback
                 logging.debug(f"Insurance plans query failed (using fallback): {e}")
@@ -315,6 +327,72 @@ class DatabaseHelper:
             return []
         except Exception as e:
             logging.error(f"Error fetching appointments: {e}")
+            return None
+        finally:
+            DatabaseHelper.return_connection(conn)
+    
+    @staticmethod
+    def get_availability_slots(doctor_id=None, date=None, specialty=None):
+        """Get available appointment slots from database"""
+        conn = DatabaseHelper.get_connection()
+        if not conn:
+            return None
+        
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SET statement_timeout = '3s'")
+            
+            query = """
+                SELECT s.slot_id, s.doctor_id, d.name as doctor_name, d.doc_type as specialty, d.department,
+                       s.date, s.start_time, s.end_time, s.available
+                FROM availability_slots s
+                LEFT JOIN doctors d ON s.doctor_id = d.doctor_id
+                WHERE s.available = true
+            """
+            params = []
+            
+            if doctor_id:
+                query += " AND s.doctor_id = %s"
+                params.append(doctor_id)
+            
+            if date:
+                query += " AND s.date = %s"
+                params.append(date)
+            else:
+                # Default to next 7 days
+                query += " AND s.date >= CURRENT_DATE AND s.date <= CURRENT_DATE + INTERVAL '7 days'"
+            
+            if specialty:
+                query += " AND (d.doc_type ILIKE %s OR d.specialty ILIKE %s OR d.department ILIKE %s)"
+                specialty_term = f"%{specialty}%"
+                params.extend([specialty_term, specialty_term, specialty_term])
+            
+            query += " ORDER BY s.date, s.start_time LIMIT 20"
+            
+            cursor.execute(query, params if params else None)
+            slots = cursor.fetchall()
+            
+            if slots:
+                result = []
+                for slot in slots:
+                    result.append({
+                        'slot_id': slot[0],
+                        'doctor_id': slot[1],
+                        'doctor_name': slot[2] or 'Unknown',
+                        'specialty': slot[3] or 'General',
+                        'department': slot[4] or 'General',
+                        'date': slot[5].isoformat() if isinstance(slot[5], datetime) else str(slot[5]),
+                        'start_time': str(slot[6]) if slot[6] else None,
+                        'end_time': str(slot[7]) if slot[7] else None,
+                        'available': slot[8]
+                    })
+                logging.info(f"Retrieved {len(result)} available slots from database")
+                return result
+            
+            cursor.close()
+            return []
+        except Exception as e:
+            logging.debug(f"Error fetching availability slots: {e}")
             return None
         finally:
             DatabaseHelper.return_connection(conn)
