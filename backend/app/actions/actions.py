@@ -977,21 +977,61 @@ class AWSBedrockChat(Action):
                 except Exception as e:
                     logging.debug(f"AWS Intelligence analysis failed: {e}")
         
-            # RAG STEP 1: Retrieve relevant context from database (only for complex queries)
+            # RAG STEP 1: Retrieve relevant context from database (ALWAYS for intelligent responses)
             rag_retriever = self._get_rag_retriever()
             retrieved_context = {}
             context_string = ""
             
+            # Always try to retrieve context from database for intelligent responses
             if rag_retriever:
                 try:
+                    # Retrieve context using RAG system
                     retrieved_context = rag_retriever.retrieve_context(
                         query=user_message,
                         user_id=user_id,
                         patient_id=patient_id
                     )
+                    
+                    # Also retrieve specific data based on query type
+                    msg_lower = user_message.lower()
+                    
+                    # If query mentions doctors, retrieve doctors from database
+                    if any(word in msg_lower for word in ["doctor", "physician", "specialist", "suggest", "find", "list"]):
+                        try:
+                            doctors = rag_retriever.retrieve_doctors(user_message, limit=10)
+                            if doctors:
+                                retrieved_context['doctors'] = doctors
+                                logging.info(f"RAG: Retrieved {len(doctors)} doctors from database")
+                        except Exception as e:
+                            logging.debug(f"RAG doctor retrieval failed: {e}")
+                    
+                    # If query mentions insurance, retrieve insurance plans from database
+                    if any(word in msg_lower for word in ["insurance", "plan", "coverage", "benefit"]):
+                        try:
+                            insurance_plans = DatabaseHelper.get_insurance_plans()
+                            if insurance_plans:
+                                retrieved_context['insurance_plans'] = insurance_plans
+                                logging.info(f"RAG: Retrieved {len(insurance_plans)} insurance plans from database")
+                        except Exception as e:
+                            logging.debug(f"RAG insurance retrieval failed: {e}")
+                    
+                    # If query mentions appointments, retrieve appointments from database
+                    if any(word in msg_lower for word in ["appointment", "book", "schedule"]):
+                        try:
+                            if patient_id:
+                                appointments = rag_retriever.retrieve_appointments(patient_id=patient_id, limit=10)
+                                if appointments:
+                                    retrieved_context['appointments'] = appointments
+                                    logging.info(f"RAG: Retrieved {len(appointments)} appointments from database")
+                        except Exception as e:
+                            logging.debug(f"RAG appointment retrieval failed: {e}")
+                    
+                    # Format context for LLM
                     context_string = rag_retriever.format_context_for_llm(retrieved_context)
+                    logging.info(f"RAG: Retrieved context with {len(retrieved_context)} data types")
                 except Exception as e:
                     logging.debug(f"RAG retrieval failed: {e}")
+                    # Continue without RAG context - bot will still work
             
             # Get detected intent and entities for context
             intent = tracker.latest_message.get("intent", {}).get("name", "")
@@ -1059,10 +1099,46 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
             # (Simple queries already handled above, so this is only for complex queries)
             response = None
             
-            # COMPLEX QUERIES: Use AWS Intelligence with timeout protection
+            # COMPLEX QUERIES: Use AWS Bedrock LLM with RAG context for super intelligent responses
             try:
-                # Use AWS Intelligence Services for complex queries (super intelligent)
-                if aws_intelligence:
+                # PRIORITY 1: Use AWS Bedrock with RAG context for intelligent responses
+                if bedrock_helper and context_string:
+                    # Use Bedrock with RAG-retrieved context for intelligent, database-aware responses
+                    enhanced_prompt = f"""User Query: {user_message}
+
+RETRIEVED CONTEXT FROM DATABASE (RAG):
+{context_string}
+
+Please provide a comprehensive, intelligent response using the retrieved context above. 
+- If doctors are in the context, reference them specifically by name and specialty
+- If insurance plans are in the context, reference them specifically with details
+- If appointments are in the context, reference them specifically
+- Use the specific information from the database to give accurate, helpful answers
+- If context is available, prioritize it over general knowledge
+- Always cite specific information from the retrieved context when available
+
+Conversation History:
+{json.dumps(conversation_history[-5:], indent=2) if conversation_history else 'None'}
+
+Provide a helpful, empathetic, and comprehensive response."""
+                    
+                    response = bedrock_helper.get_response(enhanced_prompt, conversation_history)
+                    if response and response.strip():
+                        # Check if response is an error message
+                        error_indicators = [
+                            "trouble connecting to my AI brain",
+                            "AWS credentials are configured",
+                            "configuration issue",
+                            "encountered a technical issue"
+                        ]
+                        is_error_response = any(indicator in response for indicator in error_indicators)
+                        if is_error_response:
+                            response = None  # Will use fallback below
+                        else:
+                            logging.info(f"Bedrock with RAG: Generated intelligent response using database context")
+                
+                # PRIORITY 2: Use AWS Intelligence Services if Bedrock direct call didn't work
+                if not response and aws_intelligence:
                     response = aws_intelligence.generate_conversational_response(
                         user_message=user_message,
                         context=retrieved_context,
@@ -1145,14 +1221,51 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                     else:
                         response = "I'm searching for available doctors. Let me check our database and get back to you with available options. In the meantime, you can also call our appointment line at (555) 123-4567 or visit our website to see all available doctors."
                 
-                # Handle "yes" responses intelligently based on conversation context
+                # Handle "yes" responses intelligently for ALL scenarios using RAG and database
                 elif any(word in msg_lower for word in ["yes", "yeah", "yep", "sure", "ok", "okay"]) and len(msg_lower.strip()) < 10:
                     # Check conversation context to understand what "yes" refers to
-                    context_lower = " ".join([msg.get("content", "").lower() for msg in conversation_history[-3:]])
+                    context_lower = " ".join([msg.get("content", "").lower() for msg in conversation_history[-5:]])
+                    
+                    # Use RAG to retrieve relevant data from database
+                    doctors_from_rag = retrieved_context.get('doctors', []) if retrieved_context else []
+                    insurance_plans_from_rag = retrieved_context.get('insurance_plans', []) if retrieved_context else []
+                    appointments_from_rag = retrieved_context.get('appointments', []) if retrieved_context else []
                     
                     if "insurance" in context_lower or "plan" in context_lower or "coverage" in context_lower:
-                        # User said yes to insurance - show detailed plans
-                        response = """Here are all available insurance plans with details:
+                        # User said yes to insurance - use RAG to retrieve from database
+                        insurance_plans = insurance_plans_from_rag
+                        if not insurance_plans:
+                            try:
+                                insurance_plans = DatabaseHelper.get_insurance_plans()
+                            except Exception as e:
+                                logging.debug(f"Could not fetch insurance plans: {e}")
+                        
+                        # If still no plans, try RAG retriever
+                        if not insurance_plans and rag_retriever:
+                            try:
+                                # RAG will retrieve insurance plans in retrieve_context
+                                pass
+                            except Exception as e:
+                                logging.debug(f"RAG insurance retrieval failed: {e}")
+                        
+                        if insurance_plans and len(insurance_plans) > 0:
+                            response = f"Here are all available insurance plans from our database ({len(insurance_plans)} plans):\n\n"
+                            for i, plan in enumerate(insurance_plans[:5], 1):
+                                response += f"**{i}. {plan.get('name', 'Insurance Plan')}**\n"
+                                response += f"   Monthly Premium: {plan.get('monthly_premium', 'N/A')}\n"
+                                response += f"   Deductible: {plan.get('deductible', 'N/A')}\n"
+                                response += f"   Coverage: {plan.get('coverage', 'N/A')}\n"
+                                features = plan.get('features', [])
+                                if features:
+                                    if isinstance(features, list):
+                                        response += f"   Features: {', '.join(features[:3])}\n"
+                                    else:
+                                        response += f"   Features: {features}\n"
+                                response += "\n"
+                            response += "Would you like more details about any specific plan, or personalized recommendations based on your needs?"
+                        else:
+                            # Fallback to default plans
+                            response = """Here are all available insurance plans:
 
 **1. Basic Health Plan**
    Monthly Premium: $150
@@ -1175,38 +1288,102 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
    Features: All premium features, Family coverage, Maternity care, Pediatric care
    Best for: Families with children
 
-Would you like more details about any specific plan, or would you like personalized recommendations based on your needs?"""
-                    elif "doctor" in context_lower or "specialist" in context_lower or "physician" in context_lower:
-                        # User said yes to finding doctors - actually search for doctors
-                        # Check if viral/symptom was mentioned earlier
+Would you like more details about any specific plan, or personalized recommendations?"""
+                    
+                    elif "doctor" in context_lower or "specialist" in context_lower or "physician" in context_lower or "suggest" in context_lower:
+                        # User said yes to finding doctors - use RAG to retrieve from database intelligently
+                        specialty = None
                         if "viral" in context_lower or "symptom" in context_lower or "suffering" in context_lower:
-                            specialty = "general medicine"  # General physician for viral/symptoms
-                        else:
-                            specialty = None  # Search all doctors
+                            specialty = "general medicine"
+                        elif "gynecologist" in context_lower or "gynec" in context_lower:
+                            specialty = "gynecology"
+                        elif "cardiologist" in context_lower:
+                            specialty = "cardiology"
+                        elif "neurologist" in context_lower:
+                            specialty = "neurology"
+                        elif "dermatologist" in context_lower:
+                            specialty = "dermatology"
+                        elif "pediatrician" in context_lower:
+                            specialty = "pediatrics"
                         
-                        doctors = None
-                        try:
-                            doctors = DatabaseHelper.get_doctors(specialty=specialty)
-                        except Exception as e:
-                            logging.debug(f"Could not fetch doctors: {e}")
+                        # PRIORITY: Use RAG-retrieved doctors from database
+                        doctors = doctors_from_rag
+                        if not doctors and rag_retriever:
+                            try:
+                                # Use RAG retriever to get doctors from database
+                                doctors = rag_retriever.retrieve_doctors(user_message, specialty=specialty, limit=10)
+                                logging.info(f"RAG: Retrieved {len(doctors) if doctors else 0} doctors directly from database")
+                            except Exception as e:
+                                logging.debug(f"RAG doctor retrieval failed: {e}")
+                        
+                        # Fallback to DatabaseHelper if RAG didn't return doctors
+                        if not doctors:
+                            try:
+                                doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                                logging.info(f"DatabaseHelper: Retrieved {len(doctors) if doctors else 0} doctors")
+                            except Exception as e:
+                                logging.debug(f"Could not fetch doctors: {e}")
                         
                         if doctors and len(doctors) > 0:
-                            response = f"I found {len(doctors)} doctor(s) available:\n\n"
+                            response = f"I found {len(doctors)} doctor(s) available in our database:\n\n"
                             for i, doc in enumerate(doctors[:5], 1):
                                 response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
                                 response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
-                                response += f"   Department: {doc.get('department', 'General Medicine')}\n"
+                                if doc.get('department'):
+                                    response += f"   Department: {doc.get('department')}\n"
                                 if doc.get('phone'):
                                     response += f"   Phone: {doc.get('phone')}\n"
+                                if doc.get('experience_years'):
+                                    response += f"   Experience: {doc.get('experience_years')} years\n"
+                                if doc.get('rating'):
+                                    response += f"   Rating: {doc.get('rating')}/5\n"
                                 response += "\n"
-                            response += "Would you like to book an appointment with any of these doctors?"
+                            response += "Would you like to book an appointment with any of these doctors? I can help you schedule a visit!"
                         else:
-                            response = "I'm searching for available doctors. Let me check our database and get back to you with available options. In the meantime, you can also call our appointment line at (555) 123-4567 or visit our website to see all available doctors."
+                            response = "I'm searching our database for available doctors. Let me check and get back to you with available options. In the meantime, you can also call our appointment line at (555) 123-4567 or visit our website to see all available doctors."
+                    
                     elif "appointment" in context_lower or "book" in context_lower or "schedule" in context_lower:
-                        response = "Great! To book an appointment, please tell me:\n• Your symptoms or preferred specialty\n• Preferred date and time (if any)\n• Any specific doctor preference\n\nI'll find the right doctor and show you available time slots."
+                        # User said yes to booking - use RAG to get available doctors and slots
+                        doctors = doctors_from_rag
+                        if not doctors:
+                            try:
+                                doctors = DatabaseHelper.get_doctors(limit=5)
+                            except Exception as e:
+                                logging.debug(f"Could not fetch doctors: {e}")
+                        
+                        if doctors and len(doctors) > 0:
+                            response = "Great! I can help you book an appointment. Here are available doctors:\n\n"
+                            for i, doc in enumerate(doctors[:3], 1):
+                                response += f"{i}. Dr. {doc.get('name', 'N/A')} - {doc.get('specialty', 'General Medicine')}\n"
+                            response += "\nPlease tell me:\n• Which doctor you'd like to see\n• Your preferred date and time\n• Your symptoms or reason for visit\n\nI'll help you schedule the appointment!"
+                        else:
+                            response = "Great! To book an appointment, please tell me:\n• Your symptoms or preferred specialty\n• Preferred date and time (if any)\n• Any specific doctor preference\n\nI'll find the right doctor and show you available time slots."
+                    
+                    elif "lab" in context_lower or "test" in context_lower or "result" in context_lower:
+                        # User said yes to lab results
+                        response = "I can help you access and understand your lab results! I can:\n• Retrieve your test results from our system\n• Explain what your results mean\n• Help you understand your diagnosis\n• Guide you on next steps\n\nWould you like me to retrieve your recent lab results, or do you have specific test results you'd like me to explain?"
+                    
+                    elif "bill" in context_lower or "billing" in context_lower or "payment" in context_lower:
+                        # User said yes to billing
+                        response = "I can help with billing! I can:\n• Show you billing statements\n• Explain charges and fees\n• Help with payment plans\n• Verify insurance coverage for procedures\n• Provide cost estimates\n\nWhat billing question can I help with? You can ask about a specific bill, payment options, or cost estimates."
+                    
+                    elif "wellness" in context_lower or "diet" in context_lower or "exercise" in context_lower or "fitness" in context_lower:
+                        # User said yes to wellness
+                        response = "I can help with wellness! I can provide:\n• Personalized diet recommendations\n• Exercise and fitness plans\n• Sleep hygiene tips\n• Weight management guidance\n• Nutrition advice\n• Lifestyle recommendations\n\nWhat aspect of wellness would you like help with? For example, you can ask about diet plans, exercise routines, or sleep tips."
+                    
+                    elif "mental" in context_lower or "therapy" in context_lower or "counselor" in context_lower:
+                        # User said yes to mental health
+                        response = "I can help with mental health support! I can:\n• Provide mental health assessments (GAD-7 for anxiety, PHQ-9 for depression)\n• Help you find mental health professionals\n• Provide resources for stress management\n• Guide you to appropriate care\n\nFor mental health crises, please contact a crisis hotline or seek immediate professional help. How can I assist you with mental health support?"
+                    
+                    elif "location" in context_lower or "hospital" in context_lower or "clinic" in context_lower:
+                        # User said yes to locations
+                        response = "I can help you find healthcare facilities! I can:\n• Find hospitals and clinics near you\n• Show addresses and contact information\n• Check hours of operation\n• Show services available at each location\n\nWhat type of facility are you looking for? You can ask for hospitals, clinics, urgent care centers, or specific specialties."
+                    
                     else:
-                        # Generic yes response
-                        response = "I'm here to help! Could you please tell me more about what you need? For example:\n• 'I need to find a doctor'\n• 'I want to book an appointment'\n• 'I need help with insurance'\n• 'I have [symptoms]'\n\nWhat can I help you with?"
+                        # Generic yes - use intelligent fallback with RAG context
+                        response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+                        if not response or len(response) < 50:
+                            response = "I'm here to help! Could you please tell me more about what you need? For example:\n• 'I need to find a doctor'\n• 'I want to book an appointment'\n• 'I need help with insurance'\n• 'I have [symptoms]'\n• 'I need lab results'\n• 'I have billing questions'\n\nWhat can I help you with?"
                 
                 # Check for symptoms first - suggest appropriate doctor
                 elif any(word in msg_lower for word in ["fever", "cold", "cough", "suffering", "symptom", "sick", "pain", "viral"]):

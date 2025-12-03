@@ -275,4 +275,138 @@ class RAGRetriever:
             context['medical_records'] = RAGRetriever.retrieve_medical_records('', max_results)
         
         return context
+    
+    def retrieve_context(self, query: str, user_id: Optional[str] = None, patient_id: Optional[str] = None) -> Dict[str, Any]:
+        """Main method to retrieve comprehensive context for RAG - used by action_aws_bedrock_chat"""
+        context = {
+            'doctors': [],
+            'insurance_plans': [],
+            'appointments': [],
+            'medical_records': [],
+            'patients': []
+        }
+        
+        query_lower = query.lower()
+        
+        # Always try to retrieve doctors if query is related
+        if any(word in query_lower for word in ['doctor', 'physician', 'specialist', 'suggest', 'find', 'list', 'show']):
+            specialty = None
+            # Extract specialty from query
+            specialty_map = {
+                'gynecologist': 'gynecology', 'gynec': 'gynecology',
+                'cardiologist': 'cardiology', 'cardiac': 'cardiology',
+                'neurologist': 'neurology',
+                'dermatologist': 'dermatology',
+                'pediatrician': 'pediatrics', 'pediatric': 'pediatrics',
+                'orthopedic': 'orthopedics',
+                'psychiatrist': 'psychiatry',
+                'general physician': 'general medicine', 'general practitioner': 'general medicine', 'gp': 'general medicine'
+            }
+            for key, value in specialty_map.items():
+                if key in query_lower:
+                    specialty = value
+                    break
+            
+            try:
+                doctors = self.retrieve_doctors(query, specialty, limit=10)
+                if doctors:
+                    context['doctors'] = doctors
+                    logger.info(f"RAG: Retrieved {len(doctors)} doctors from database")
+            except Exception as e:
+                logger.debug(f"RAG doctor retrieval failed: {e}")
+        
+        # Retrieve insurance plans if query is related
+        if any(word in query_lower for word in ['insurance', 'plan', 'coverage', 'benefit', 'premium']):
+            try:
+                from .actions import DatabaseHelper
+                insurance_plans = DatabaseHelper.get_insurance_plans()
+                if insurance_plans:
+                    context['insurance_plans'] = insurance_plans
+                    logger.info(f"RAG: Retrieved {len(insurance_plans)} insurance plans from database")
+            except Exception as e:
+                logger.debug(f"RAG insurance retrieval failed: {e}")
+        
+        # Retrieve appointments if query is related
+        if any(word in query_lower for word in ['appointment', 'book', 'schedule', 'visit']):
+            try:
+                appointments = self.retrieve_appointments(patient_id=patient_id, limit=10)
+                if appointments:
+                    context['appointments'] = appointments
+                    logger.info(f"RAG: Retrieved {len(appointments)} appointments from database")
+            except Exception as e:
+                logger.debug(f"RAG appointment retrieval failed: {e}")
+        
+        # Retrieve medical records if query is related
+        if any(word in query_lower for word in ['lab', 'test', 'result', 'report', 'diagnosis', 'treatment', 'record']):
+            if patient_id:
+                try:
+                    records = self.retrieve_medical_records(patient_id, limit=10)
+                    if records:
+                        context['medical_records'] = records
+                        logger.info(f"RAG: Retrieved {len(records)} medical records from database")
+                except Exception as e:
+                    logger.debug(f"RAG medical records retrieval failed: {e}")
+        
+        return context
+    
+    def format_context_for_llm(self, context: Dict[str, Any]) -> str:
+        """Format retrieved context as a string for LLM prompt"""
+        context_parts = []
+        
+        if context.get('doctors'):
+            doctors = context['doctors']
+            context_parts.append(f"AVAILABLE DOCTORS ({len(doctors)}):")
+            for i, doc in enumerate(doctors[:5], 1):
+                doc_info = f"{i}. Dr. {doc.get('name', 'N/A')}"
+                if doc.get('specialty'):
+                    doc_info += f" - Specialty: {doc.get('specialty')}"
+                if doc.get('department'):
+                    doc_info += f", Department: {doc.get('department')}"
+                if doc.get('phone'):
+                    doc_info += f", Phone: {doc.get('phone')}"
+                if doc.get('experience_years'):
+                    doc_info += f", Experience: {doc.get('experience_years')} years"
+                if doc.get('rating'):
+                    doc_info += f", Rating: {doc.get('rating')}/5"
+                context_parts.append(doc_info)
+            context_parts.append("")
+        
+        if context.get('insurance_plans'):
+            plans = context['insurance_plans']
+            context_parts.append(f"INSURANCE PLANS ({len(plans)}):")
+            for i, plan in enumerate(plans[:5], 1):
+                plan_info = f"{i}. {plan.get('name', 'Insurance Plan')}"
+                if plan.get('monthly_premium'):
+                    plan_info += f" - Premium: {plan.get('monthly_premium')}/month"
+                if plan.get('coverage'):
+                    plan_info += f", Coverage: {plan.get('coverage')}"
+                if plan.get('deductible'):
+                    plan_info += f", Deductible: {plan.get('deductible')}"
+                context_parts.append(plan_info)
+            context_parts.append("")
+        
+        if context.get('appointments'):
+            appointments = context['appointments']
+            context_parts.append(f"APPOINTMENTS ({len(appointments)}):")
+            for i, apt in enumerate(appointments[:5], 1):
+                apt_info = f"{i}. Appointment on {apt.get('appointment_date', 'N/A')}"
+                if apt.get('status'):
+                    apt_info += f" - Status: {apt.get('status')}"
+                context_parts.append(apt_info)
+            context_parts.append("")
+        
+        if context.get('medical_records'):
+            records = context['medical_records']
+            context_parts.append(f"MEDICAL RECORDS ({len(records)}):")
+            for i, record in enumerate(records[:5], 1):
+                record_info = f"{i}. {record.get('record_type', 'Record')} on {record.get('record_date', 'N/A')}"
+                if record.get('diagnosis'):
+                    record_info += f" - Diagnosis: {record.get('diagnosis')}"
+                context_parts.append(record_info)
+            context_parts.append("")
+        
+        if not context_parts:
+            return "No specific context retrieved from database. Use general knowledge to provide helpful response."
+        
+        return "\n".join(context_parts)
 
