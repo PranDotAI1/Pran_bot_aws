@@ -1280,6 +1280,64 @@ class AWSBedrockChat(Action):
             msg_lower = user_message.lower()
             logging.info(f"action_aws_bedrock_chat called with message: '{user_message}' from sender: {sender_id}")
             
+            # PRIORITY 0: Direct insurance query handler - MUST be FIRST, before everything else
+            # This ensures "I want insurance", "insurance plans", etc. ALWAYS work
+            has_insurance_word = "insurance" in msg_lower
+            has_doctor_word = any(word in msg_lower for word in ["doctor", "physician", "specialist", "medical professional"])
+            explicit_insurance_phrases = [
+                "i want insurance", "want insurance", "need insurance",
+                "insurance plan", "insurance plans", 
+                "can you help me with insurance", "help me with insurance",
+                "show me insurance", "show insurance plans",
+                "insurance coverage", "insurance benefits", "insurance premium"
+            ]
+            has_explicit_phrase = any(phrase in msg_lower for phrase in explicit_insurance_phrases)
+            is_insurance_query = (has_insurance_word or has_explicit_phrase) and not has_doctor_word
+            
+            if is_insurance_query:
+                logging.info("PRIORITY 0: Direct insurance query detected - handling immediately")
+                try:
+                    insurance_plans = DatabaseHelper.get_insurance_plans()
+                    if not insurance_plans:
+                        insurance_plans = DatabaseHelper._get_sample_insurance_plans()
+                    
+                    if insurance_plans and len(insurance_plans) > 0:
+                        response = f"✅ **Here are all available insurance plans ({len(insurance_plans)}):**\n\n"
+                        for i, plan in enumerate(insurance_plans[:5], 1):
+                            response += f"**{i}. {plan.get('name', 'Insurance Plan')}**\n"
+                            premium = plan.get('monthly_premium', 'N/A')
+                            if isinstance(premium, str) and not premium.startswith('$'):
+                                premium = f"${premium}"
+                            response += f"   💰 Monthly Premium: {premium}\n"
+                            
+                            coverage = plan.get('coverage', 'N/A')
+                            if isinstance(coverage, (int, float)):
+                                coverage = f"{int(coverage)}%"
+                            elif isinstance(coverage, str) and not coverage.endswith('%'):
+                                coverage = f"{coverage}%"
+                            response += f"   📊 Coverage: {coverage}\n"
+                            
+                            deductible = plan.get('deductible', 'N/A')
+                            if isinstance(deductible, str) and not deductible.startswith('$'):
+                                deductible = f"${deductible}"
+                            response += f"   💳 Deductible: {deductible}\n"
+                            
+                            features = plan.get('features', [])
+                            if features:
+                                if isinstance(features, list):
+                                    response += f"   ✨ Features: {', '.join(features[:3])}\n"
+                            response += "\n"
+                        response += "📋 **Would you like more details about any specific plan?**\n"
+                        response += "Just tell me the plan name or number!"
+                        
+                        safe_dispatcher.utter_message(text=response)
+                        logging.info(f"PRIORITY 0: Displayed {len(insurance_plans)} insurance plans")
+                        return []
+                except Exception as e:
+                    logging.error(f"PRIORITY 0: Direct insurance handler failed: {e}")
+                    import traceback
+                    logging.error(traceback.format_exc())
+            
             # Get conversation history for intelligent responses
             conversation_history = []
             for event in tracker.events[-10:]:  # Last 10 events for conversation context
@@ -1458,72 +1516,6 @@ class AWSBedrockChat(Action):
                         safe_dispatcher.utter_message(text=response)
                         logging.info("action_aws_bedrock_chat: Handled generic 'yes' with error fallback")
                         return []
-            
-            # PRIORITY 0: Direct insurance query handler - ALWAYS works, even before LLM Router
-            # This ensures "I want insurance", "can you help me with insurance plans" etc. ALWAYS work
-            # NOTE: msg_lower is already defined above, but we redefine it here for clarity
-            msg_lower_check = user_message.lower()
-            
-            # Direct insurance query detection - SIMPLE and EXPLICIT
-            # Check if message contains "insurance" AND doesn't contain doctor-related words
-            has_insurance_word = "insurance" in msg_lower_check
-            has_doctor_word = any(word in msg_lower_check for word in ["doctor", "physician", "specialist", "medical professional"])
-            
-            # Also check for explicit insurance phrases
-            explicit_insurance_phrases = [
-                "i want insurance", "want insurance", "need insurance",
-                "insurance plan", "insurance plans", 
-                "can you help me with insurance", "help me with insurance",
-                "show me insurance", "show insurance plans",
-                "insurance coverage", "insurance benefits", "insurance premium"
-            ]
-            has_explicit_phrase = any(phrase in msg_lower_check for phrase in explicit_insurance_phrases)
-            
-            is_insurance_query = (has_insurance_word or has_explicit_phrase) and not has_doctor_word
-            
-            if is_insurance_query:
-                logging.info("Direct insurance query detected - handling immediately")
-                try:
-                    insurance_plans = DatabaseHelper.get_insurance_plans()
-                    if not insurance_plans:
-                        insurance_plans = DatabaseHelper._get_sample_insurance_plans()
-                    
-                    if insurance_plans and len(insurance_plans) > 0:
-                        response = f"✅ **Here are all available insurance plans ({len(insurance_plans)}):**\n\n"
-                        for i, plan in enumerate(insurance_plans[:5], 1):
-                            response += f"**{i}. {plan.get('name', 'Insurance Plan')}**\n"
-                            premium = plan.get('monthly_premium', 'N/A')
-                            if isinstance(premium, str) and not premium.startswith('$'):
-                                premium = f"${premium}"
-                            response += f"   💰 Monthly Premium: {premium}\n"
-                            
-                            coverage = plan.get('coverage', 'N/A')
-                            if isinstance(coverage, (int, float)):
-                                coverage = f"{int(coverage)}%"
-                            elif isinstance(coverage, str) and not coverage.endswith('%'):
-                                coverage = f"{coverage}%"
-                            response += f"   📊 Coverage: {coverage}\n"
-                            
-                            deductible = plan.get('deductible', 'N/A')
-                            if isinstance(deductible, str) and not deductible.startswith('$'):
-                                deductible = f"${deductible}"
-                            response += f"   💳 Deductible: {deductible}\n"
-                            
-                            features = plan.get('features', [])
-                            if features:
-                                if isinstance(features, list):
-                                    response += f"   ✨ Features: {', '.join(features[:3])}\n"
-                            response += "\n"
-                        response += "📋 **Would you like more details about any specific plan?**\n"
-                        response += "Just tell me the plan name or number!"
-                        
-                        safe_dispatcher.utter_message(text=response)
-                        logging.info(f"Direct insurance handler: Displayed {len(insurance_plans)} insurance plans")
-                        return []
-                except Exception as e:
-                    logging.error(f"Direct insurance handler failed: {e}")
-                    import traceback
-                    logging.error(traceback.format_exc())
             
             # PRIORITY 1: Use AWS Bedrock LLM Router - intelligently handle ALL queries
             # This is the PRIMARY handler for non-insurance queries - LLM understands context and intent
