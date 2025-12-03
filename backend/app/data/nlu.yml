@@ -381,6 +381,15 @@ nlu:
       - What insurance coverage options do you have?
       - Show me insurance options.
       - What are the available insurance plans?
+      - I want insurance
+      - insurance plans
+      - Can you help me with insurance plans
+      - show me insurance
+      - insurance coverage
+      - insurance benefits
+      - I need insurance
+      - want insurance
+      - help me with insurance
 
   - intent: request_insurance_suggestions
     examples: |
