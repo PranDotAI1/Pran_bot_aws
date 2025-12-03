@@ -1869,6 +1869,7 @@ Would you like more details about any specific plan, or would you like personali
             if response and response.strip():
                 safe_dispatcher.utter_message(text=response)
                 logging.info(f"action_aws_bedrock_chat returning response: {response[:100]}...")
+                return []  # CRITICAL: Return immediately after sending response
             else:
                 # Last resort fallback - provide helpful response based on message
                 msg_lower = user_message.lower()
@@ -1917,7 +1918,9 @@ Would you like more details about any specific plan, or would you like personali
                 
                 safe_dispatcher.utter_message(text=fallback_response)
                 logging.warning(f"action_aws_bedrock_chat: Response was empty, using fallback: {fallback_response[:50]}...")
+                return []  # CRITICAL: Return immediately after sending fallback response
             
+            # Final safety - should never reach here, but ensure we return
             return []
             
         except Exception as e:
