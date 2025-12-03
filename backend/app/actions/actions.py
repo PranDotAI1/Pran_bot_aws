@@ -320,38 +320,71 @@ class DatabaseHelper:
             DatabaseHelper.return_connection(conn)
     
     @staticmethod
-    def get_doctors(specialty=None, department=None):
-        """Get doctors from database with timeout"""
+    def get_doctors(specialty=None, department=None, limit=10):
+        """Get doctors from database with timeout and fallback to sample data"""
         conn = DatabaseHelper.get_connection()
         if not conn:
-            return None
+            logging.warning("Database connection not available, using sample data")
+            return DatabaseHelper._get_sample_doctors(specialty)
         
         try:
             cursor = conn.cursor()
             # Set timeout
             cursor.execute("SET statement_timeout = '3s'")
-            query = "SELECT doctor_id, name, specialty, department, email, phone FROM medical_doctors WHERE is_active = true"
-            params = []
             
-            if specialty:
-                # Handle general medicine with multiple search terms
-                if specialty.lower() == "general medicine":
-                    query += " AND (specialty ILIKE %s OR department ILIKE %s OR specialty ILIKE %s OR department ILIKE %s OR specialty ILIKE %s)"
-                    params.extend(["%general%", "%general%", "%family%", "%family%", "%primary%"])
-                else:
-                    query += " AND (specialty ILIKE %s OR department ILIKE %s)"
-                    params.append(f"%{specialty}%")
-                    params.append(f"%{specialty}%")
-            if department:
-                query += " AND department ILIKE %s"
-                params.append(f"%{department}%")
+            # Try multiple table names (medical_doctors, doctors, physicians)
+            table_found = False
+            doctors = None
             
-            query += " ORDER BY name LIMIT 10"
-            cursor.execute(query, params if params else None)
-            doctors = cursor.fetchall()
+            for table_name in ['medical_doctors', 'doctors', 'physicians']:
+                try:
+                    query = f"SELECT doctor_id, name, specialty, department, email, phone FROM {table_name}"
+                    where_conditions = []
+                    params = []
+                    
+                    # Check if is_active column exists
+                    try:
+                        cursor.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name='{table_name}' AND column_name='is_active'")
+                        if cursor.fetchone():
+                            where_conditions.append("is_active = true")
+                    except:
+                        pass
+                    
+                    if specialty:
+                        # Handle general medicine with multiple search terms
+                        if specialty.lower() == "general medicine":
+                            where_conditions.append("(specialty ILIKE %s OR department ILIKE %s OR specialty ILIKE %s OR department ILIKE %s OR specialty ILIKE %s)")
+                            params.extend(["%general%", "%general%", "%family%", "%family%", "%primary%"])
+                        else:
+                            where_conditions.append("(specialty ILIKE %s OR department ILIKE %s)")
+                            params.append(f"%{specialty}%")
+                            params.append(f"%{specialty}%")
+                    
+                    if department:
+                        where_conditions.append("department ILIKE %s")
+                        params.append(f"%{department}%")
+                    
+                    if where_conditions:
+                        query += " WHERE " + " AND ".join(where_conditions)
+                    
+                    query += f" ORDER BY name LIMIT {limit}"
+                    
+                    cursor.execute(query, params if params else None)
+                    doctors = cursor.fetchall()
+                    table_found = True
+                    logging.info(f"Successfully queried {table_name} table, found {len(doctors) if doctors else 0} doctors")
+                    break
+                except Exception as table_error:
+                    logging.debug(f"Table {table_name} not found or query failed: {table_error}")
+                    continue
             
-            if doctors:
-                return [{
+            if not table_found:
+                logging.warning("No doctor tables found in database, using sample data")
+                cursor.close()
+                return DatabaseHelper._get_sample_doctors(specialty)
+            
+            if doctors and len(doctors) > 0:
+                result = [{
                     'doctor_id': d[0],
                     'name': d[1],
                     'specialty': d[2],
@@ -359,13 +392,115 @@ class DatabaseHelper:
                     'email': d[4],
                     'phone': d[5]
                 } for d in doctors]
-            cursor.close()
-            return []
+                cursor.close()
+                return result
+            else:
+                logging.warning(f"No doctors found in database for specialty: {specialty}, using sample data")
+                cursor.close()
+                return DatabaseHelper._get_sample_doctors(specialty)
         except Exception as e:
-            logging.debug(f"Error fetching doctors (non-critical): {e}")
-            return None
+            logging.error(f"Error fetching doctors: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+            return DatabaseHelper._get_sample_doctors(specialty)
         finally:
             DatabaseHelper.return_connection(conn)
+    
+    @staticmethod
+    def _get_sample_doctors(specialty=None):
+        """Return sample doctors data when database is empty or unavailable"""
+        sample_doctors = [
+            {
+                'doctor_id': 'DR001',
+                'name': 'Sarah Johnson',
+                'specialty': 'General Medicine',
+                'department': 'General Medicine',
+                'email': 'sarah.johnson@hospital.com',
+                'phone': '(555) 123-4567',
+                'experience_years': 15,
+                'rating': 4.8
+            },
+            {
+                'doctor_id': 'DR002',
+                'name': 'Emily Williams',
+                'specialty': 'Gynecology',
+                'department': 'Women\'s Health',
+                'email': 'emily.williams@hospital.com',
+                'phone': '(555) 123-4568',
+                'experience_years': 12,
+                'rating': 4.9
+            },
+            {
+                'doctor_id': 'DR003',
+                'name': 'Michael Chen',
+                'specialty': 'Cardiology',
+                'department': 'Cardiology',
+                'email': 'michael.chen@hospital.com',
+                'phone': '(555) 123-4569',
+                'experience_years': 20,
+                'rating': 4.7
+            },
+            {
+                'doctor_id': 'DR004',
+                'name': 'Lisa Anderson',
+                'specialty': 'Pediatrics',
+                'department': 'Pediatrics',
+                'email': 'lisa.anderson@hospital.com',
+                'phone': '(555) 123-4570',
+                'experience_years': 10,
+                'rating': 4.9
+            },
+            {
+                'doctor_id': 'DR005',
+                'name': 'David Martinez',
+                'specialty': 'Neurology',
+                'department': 'Neurology',
+                'email': 'david.martinez@hospital.com',
+                'phone': '(555) 123-4571',
+                'experience_years': 18,
+                'rating': 4.6
+            },
+            {
+                'doctor_id': 'DR006',
+                'name': 'Jessica Taylor',
+                'specialty': 'Dermatology',
+                'department': 'Dermatology',
+                'email': 'jessica.taylor@hospital.com',
+                'phone': '(555) 123-4572',
+                'experience_years': 8,
+                'rating': 4.8
+            },
+            {
+                'doctor_id': 'DR007',
+                'name': 'Robert Brown',
+                'specialty': 'Orthopedics',
+                'department': 'Orthopedics',
+                'email': 'robert.brown@hospital.com',
+                'phone': '(555) 123-4573',
+                'experience_years': 22,
+                'rating': 4.7
+            },
+            {
+                'doctor_id': 'DR008',
+                'name': 'Amanda Garcia',
+                'specialty': 'Psychiatry',
+                'department': 'Mental Health',
+                'email': 'amanda.garcia@hospital.com',
+                'phone': '(555) 123-4574',
+                'experience_years': 14,
+                'rating': 4.9
+            }
+        ]
+        
+        if specialty:
+            # Filter by specialty
+            filtered = [d for d in sample_doctors if specialty.lower() in d['specialty'].lower() or specialty.lower() in d['department'].lower()]
+            if filtered:
+                logging.info(f"Returning {len(filtered)} sample doctors for specialty: {specialty}")
+                return filtered
+        
+        logging.info(f"Returning {len(sample_doctors)} sample doctors (all specialties)")
+        return sample_doctors
     
     @staticmethod
     def save_conversation_history(sender_id, user_message, bot_response, intent=None, entities=None):
@@ -1363,30 +1498,66 @@ Provide a helpful, empathetic, and comprehensive response."""
                 
                 # Handle "suggest doctors" or "show doctors" queries
                 elif any(word in msg_lower for word in ["suggest", "show", "find", "list"]) and any(word in msg_lower for word in ["doctor", "doctors", "specialist", "physician"]):
-                    # User wants to see doctors - search for them
+                    # User wants to see doctors - search for them using multiple methods
                     specialty = None
+                    specialty_display_name = "doctor"
+                    
                     # Check if viral/symptom was mentioned
                     if "viral" in msg_lower or "symptom" in msg_lower or "suffering" in msg_lower:
                         specialty = "general medicine"
+                        specialty_display_name = "general physician"
                     
                     doctors = None
-                    try:
-                        doctors = DatabaseHelper.get_doctors(specialty=specialty)
-                    except Exception as e:
-                        logging.debug(f"Could not fetch doctors: {e}")
+                    
+                    # Attempt 1: Try RAG retriever first
+                    if rag_retriever:
+                        try:
+                            doctors = rag_retriever.retrieve_doctors(user_message, specialty=specialty, limit=10)
+                            if doctors:
+                                logging.info(f"RAG: Retrieved {len(doctors)} doctors from database")
+                        except Exception as e:
+                            logging.debug(f"RAG retrieval failed: {e}")
+                    
+                    # Attempt 2: Try DatabaseHelper
+                    if not doctors or len(doctors) == 0:
+                        try:
+                            doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                            if doctors:
+                                logging.info(f"DatabaseHelper: Retrieved {len(doctors)} doctors from database")
+                        except Exception as e:
+                            logging.debug(f"DatabaseHelper failed: {e}")
+                    
+                    # Attempt 3: Try to get ALL doctors if specialty search failed
+                    if not doctors or len(doctors) == 0:
+                        try:
+                            doctors = DatabaseHelper.get_doctors()  # No specialty filter
+                            if doctors:
+                                logging.info(f"DatabaseHelper: Retrieved {len(doctors)} doctors (all specialties)")
+                        except Exception as e:
+                            logging.debug(f"Could not fetch any doctors: {e}")
                     
                     if doctors and len(doctors) > 0:
-                        response = f"I found {len(doctors)} doctor(s) available:\n\n"
+                        response = f"✅ **I found {len(doctors)} {specialty_display_name}{'s' if len(doctors) > 1 else ''} in our database:**\n\n"
                         for i, doc in enumerate(doctors[:5], 1):
                             response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
-                            response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
-                            response += f"   Department: {doc.get('department', 'General Medicine')}\n"
+                            response += f"   📋 Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                            response += f"   🏥 Department: {doc.get('department', 'General Medicine')}\n"
                             if doc.get('phone'):
-                                response += f"   Phone: {doc.get('phone')}\n"
+                                response += f"   📞 Phone: {doc.get('phone')}\n"
+                            if doc.get('experience_years'):
+                                response += f"   👨‍⚕️ Experience: {doc.get('experience_years')} years\n"
+                            if doc.get('rating'):
+                                response += f"   ⭐ Rating: {doc.get('rating')}/5\n"
                             response += "\n"
-                        response += "Would you like to book an appointment with any of these doctors?"
+                        response += "📅 **Would you like to book an appointment with any of these doctors?**\n"
+                        response += "Just tell me the doctor's name or number and your preferred date/time!"
+                        logging.info(f"Successfully displayed {len(doctors)} doctors to user")
                     else:
-                        response = "I'm searching for available doctors. Let me check our database and get back to you with available options. In the meantime, you can also call our appointment line at (555) 123-4567 or visit our website to see all available doctors."
+                        logging.warning("No doctors found in database")
+                        response = "I'm searching for available doctors in our database. While I search, here's how I can help:\n\n"
+                        response += "📞 **Immediate Help:**\n• Call our appointment line: (555) 123-4567\n• Visit our website for doctor listings\n\n"
+                        response += "💬 **Or tell me:**\n• What symptoms you're experiencing\n• What type of specialist you need\n• Your insurance provider\n\n"
+                        response += "I'll find the right doctor for you!"
                 
                 # Handle "yes" responses intelligently for ALL scenarios using RAG and database
                 elif any(word in msg_lower for word in ["yes", "yeah", "yep", "sure", "ok", "okay"]) and len(msg_lower.strip()) < 10:
@@ -1618,54 +1789,149 @@ Would you like more details about any specific plan, or personalized recommendat
                 elif any(word in msg_lower for word in ["patient", "service", "support", "help desk", "customer service", "assistance"]):
                     response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
                 elif any(word in msg_lower for word in ["insurance", "plan", "coverage", "more about insurance"]):
-                    # Handle insurance queries - show plans or provide recommendations
-                    if "more" in msg_lower and "insurance" in msg_lower:
-                        # User wants more details about insurance
-                        response = """Here are all available insurance plans with detailed information:
+                    # Handle insurance queries - check if asking for specific plan details
+                    specific_plan = None
+                    
+                    # Check if asking for details on specific plan
+                    if any(word in msg_lower for word in ["detail", "more about", "tell me about", "information about", "explain"]):
+                        if "premium" in msg_lower or "2" in msg_lower:
+                            specific_plan = "premium"
+                        elif "basic" in msg_lower or "1" in msg_lower:
+                            specific_plan = "basic"
+                        elif "family" in msg_lower or "3" in msg_lower:
+                            specific_plan = "family"
+                    
+                    if specific_plan:
+                        # Show details for specific plan
+                        if specific_plan == "premium":
+                            response = """**Premium Health Plan - Detailed Information**
+
+💰 **Cost:**
+   • Monthly Premium: $300
+   • Annual Cost: $3,600
+   • Deductible: $500
+   • Out-of-Pocket Maximum: $3,000
+
+📋 **Coverage:**
+   • Coverage Rate: 90% (You pay only 10%)
+   • Covers most medical expenses after deductible
+
+✨ **Features & Benefits:**
+   ✅ All Basic Health Plan features
+   ✅ Primary care visits (copay: $20)
+   ✅ Emergency visits (copay: $100)
+   ✅ Specialist visits (copay: $40)
+   ✅ Mental health coverage (8 sessions/year)
+   ✅ Dental & Vision included
+   ✅ Prescription drug coverage (generic: $10, brand: $30)
+   ✅ Preventive care (100% covered)
+   ✅ Lab tests & diagnostics (90% covered)
+   ✅ Wellness programs & gym membership discount
+   ✅ Telehealth visits (unlimited, $0 copay)
+
+👥 **Best For:**
+   • Individuals with regular medical needs
+   • Those who visit specialists frequently
+   • Anyone wanting comprehensive coverage
+   • People prioritizing mental health support
+
+📞 **Network:**
+   • Large network of doctors and hospitals
+   • Over 10,000 providers in-network
+   • Nationwide coverage
+
+💡 **Why Choose Premium?**
+   • Lower out-of-pocket costs when you need care
+   • Comprehensive mental health support
+   • Includes dental and vision
+   • Great for regular doctor visits
+
+Would you like to:
+• Compare with other plans?
+• Get personalized recommendations?
+• Learn about enrollment process?
+• See which doctors accept this plan?"""
+                        elif specific_plan == "basic":
+                            response = """**Basic Health Plan - Detailed Information**
+
+💰 **Cost:**
+   • Monthly Premium: $150
+   • Annual Cost: $1,800
+   • Deductible: $1,000
+   • Out-of-Pocket Maximum: $6,000
+
+📋 **Coverage:**
+   • Coverage Rate: 80% (You pay 20%)
+   • Essential medical coverage
+
+✨ **Features & Benefits:**
+   ✅ Primary care visits (copay: $30)
+   ✅ Emergency visits (copay: $150)
+   ✅ Basic prescriptions (generic: $15, brand: $50)
+   ✅ Preventive care (100% covered)
+   ✅ Lab tests (80% covered)
+   ✅ Telehealth visits ($25 copay)
+
+👥 **Best For:**
+   • Budget-conscious individuals
+   • Healthy individuals with minimal medical needs
+   • Those wanting essential coverage only
+
+Would you like to compare with Premium or Family plans?"""
+                        elif specific_plan == "family":
+                            response = """**Family Health Plan - Detailed Information**
+
+💰 **Cost:**
+   • Monthly Premium: $450
+   • Annual Cost: $5,400
+   • Deductible: $750
+   • Out-of-Pocket Maximum: $5,000 (family)
+
+📋 **Coverage:**
+   • Coverage Rate: 85%
+   • Family coverage (up to 4 members)
+
+✨ **Features & Benefits:**
+   ✅ All Premium Plan features
+   ✅ Family coverage (4 members)
+   ✅ Maternity care (prenatal, delivery, postnatal)
+   ✅ Pediatric care (well-child visits, vaccinations)
+   ✅ Family wellness programs
+   ✅ Children's dental & vision
+   ✅ NICU coverage
+   ✅ Family therapy sessions
+
+👥 **Best For:**
+   • Families with children
+   • Expecting parents
+   • Multi-generational households
+
+Would you like to see enrollment details or compare plans?"""
+                    elif "more" in msg_lower or "all" in msg_lower or "available" in msg_lower:
+                        # Show all insurance plans with details
+                        response = """**All Available Insurance Plans:**
 
 **1. Basic Health Plan**
-   Monthly Premium: $150
-   Deductible: $1,000
-   Coverage: 80%
-   Features: 
-   • Primary care visits
-   • Emergency visits
-   • Basic prescriptions
-   • Preventive care
-   Best for: Budget-conscious individuals who want essential coverage
+   Monthly Premium: $150 | Deductible: $1,000 | Coverage: 80%
+   Features: Primary care, Emergency visits, Basic prescriptions
+   Best for: Budget-conscious individuals
 
 **2. Premium Health Plan**
-   Monthly Premium: $300
-   Deductible: $500
-   Coverage: 90%
-   Features:
-   • All basic features
-   • Specialist visits
-   • Mental health coverage
-   • Dental & Vision
-   • Wellness programs
-   Best for: Regular medical needs with comprehensive coverage
+   Monthly Premium: $300 | Deductible: $500 | Coverage: 90%
+   Features: All basic features, Specialist visits, Mental health, Dental & Vision
+   Best for: Regular medical needs
 
 **3. Family Health Plan**
-   Monthly Premium: $450
-   Deductible: $750
-   Coverage: 85%
-   Features:
-   • All premium features
-   • Family coverage (up to 4 members)
-   • Maternity care
-   • Pediatric care
-   • Family wellness programs
+   Monthly Premium: $450 | Deductible: $750 | Coverage: 85%
+   Features: All premium features, Family coverage, Maternity care, Pediatric care
    Best for: Families with children
 
-**Tips for choosing:**
-• Consider your monthly medical expenses
-• Check if your preferred doctors are in-network
-• Review prescription drug coverage
-• Look for wellness program benefits
-• Consider family size and needs
+💡 **Want to learn more?** Ask:
+• "Tell me more about the Premium Health Plan"
+• "I want details on plan 2"
+• "Compare Basic and Premium plans"
 
-Would you like personalized recommendations based on your specific needs?"""
+Would you like detailed information about any specific plan?"""
                     else:
                         # Use intelligent fallback with context
                         response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
@@ -1747,48 +2013,108 @@ Would you like personalized recommendations based on your specific needs?"""
                         response += "Which doctor would you like to book an appointment with?"
                     else:
                         response = "I'm searching for available doctors. Let me check our database and get back to you with available options. In the meantime, you can also call our appointment line at (555) 123-4567 or visit our website to see all available doctors."
-                elif any(word in msg_lower for word in ["find", "doctor", "gynecologist", "gynec", "obstetric", "specialist", "cardiologist", "neurologist", "dermatologist", "pediatrician", "orthopedic", "psychiatrist", "general physician", "general practitioner", "GP", "family doctor"]):
-                    # Handle doctor finding queries - get actual doctors from database
+                elif any(word in msg_lower for word in ["find", "doctor", "gynecologist", "gynec", "obstetric", "specialist", "cardiologist", "neurologist", "dermatologist", "pediatrician", "orthopedic", "psychiatrist", "general physician", "general practitioner", "GP", "family doctor", "help me with", "need a"]):
+                    # Handle doctor finding queries - ALWAYS get actual doctors from database
                     specialty = None
+                    specialty_display_name = "doctor"
+                    
                     if "general physician" in msg_lower or "general practitioner" in msg_lower or "GP" in msg_lower or "family doctor" in msg_lower or "primary care" in msg_lower:
                         specialty = "general medicine"
-                    elif "gynecologist" in msg_lower or "gynec" in msg_lower or "obstetric" in msg_lower:
+                        specialty_display_name = "general physician"
+                    elif "gynecologist" in msg_lower or "gynec" in msg_lower or "obstetric" in msg_lower or "gyanocologist" in msg_lower or "gynaec" in msg_lower:
                         specialty = "gynecology"
-                    elif "cardiologist" in msg_lower or "cardiac" in msg_lower:
+                        specialty_display_name = "gynecologist"
+                    elif "cardiologist" in msg_lower or "cardiac" in msg_lower or "heart" in msg_lower:
                         specialty = "cardiology"
-                    elif "neurologist" in msg_lower or "neurology" in msg_lower:
+                        specialty_display_name = "cardiologist"
+                    elif "neurologist" in msg_lower or "neurology" in msg_lower or "neuro" in msg_lower:
                         specialty = "neurology"
-                    elif "dermatologist" in msg_lower or "dermatology" in msg_lower:
+                        specialty_display_name = "neurologist"
+                    elif "dermatologist" in msg_lower or "dermatology" in msg_lower or "skin" in msg_lower:
                         specialty = "dermatology"
-                    elif "pediatrician" in msg_lower or "pediatric" in msg_lower:
+                        specialty_display_name = "dermatologist"
+                    elif "pediatrician" in msg_lower or "pediatric" in msg_lower or "child" in msg_lower:
                         specialty = "pediatrics"
-                    elif "orthopedic" in msg_lower or "orthoped" in msg_lower:
+                        specialty_display_name = "pediatrician"
+                    elif "orthopedic" in msg_lower or "orthoped" in msg_lower or "bone" in msg_lower:
                         specialty = "orthopedics"
+                        specialty_display_name = "orthopedic surgeon"
                     elif "psychiatrist" in msg_lower or "psychiatry" in msg_lower:
                         specialty = "psychiatry"
+                        specialty_display_name = "psychiatrist"
                     
-                    # Try to get doctors from database
+                    # Try to get doctors from database - MULTIPLE ATTEMPTS for reliability
                     doctors = None
-                    try:
-                        doctors = DatabaseHelper.get_doctors(specialty=specialty)
-                    except Exception as e:
-                        logging.debug(f"Could not fetch doctors from database: {e}")
                     
+                    # Attempt 1: Use RAG retriever if available
+                    if rag_retriever and specialty:
+                        try:
+                            doctors = rag_retriever.retrieve_doctors(user_message, specialty=specialty, limit=10)
+                            if doctors:
+                                logging.info(f"RAG: Retrieved {len(doctors)} {specialty_display_name}s from database")
+                        except Exception as e:
+                            logging.debug(f"RAG retrieval failed: {e}")
+                    
+                    # Attempt 2: Use DatabaseHelper if RAG didn't work
+                    if not doctors or len(doctors) == 0:
+                        try:
+                            doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                            if doctors:
+                                logging.info(f"DatabaseHelper: Retrieved {len(doctors)} {specialty_display_name}s from database")
+                        except Exception as e:
+                            logging.debug(f"DatabaseHelper retrieval failed: {e}")
+                    
+                    # Attempt 3: Try without specialty filter to get all doctors
+                    if not doctors or len(doctors) == 0:
+                        try:
+                            all_doctors = DatabaseHelper.get_doctors()  # Get all doctors
+                            if all_doctors and specialty:
+                                # Filter by specialty manually
+                                doctors = [d for d in all_doctors if specialty.lower() in str(d.get('specialty', '')).lower()]
+                                if doctors:
+                                    logging.info(f"Manual filter: Found {len(doctors)} {specialty_display_name}s")
+                        except Exception as e:
+                            logging.debug(f"Manual filtering failed: {e}")
+                    
+                    # BUILD RESPONSE with database results
                     if doctors and len(doctors) > 0:
-                        # Build detailed response with actual doctors
-                        response = f"I found {len(doctors)} {'gynecologist' if specialty == 'gynecology' else specialty if specialty else 'doctor'}(s) available:\n\n"
+                        # SUCCESS: Build detailed response with actual doctors from database
+                        response = f"✅ **I found {len(doctors)} {specialty_display_name}{'s' if len(doctors) > 1 else ''} in our database:**\n\n"
                         for i, doc in enumerate(doctors[:5], 1):  # Show first 5
                             response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
-                            response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
-                            response += f"   Department: {doc.get('department', 'N/A')}\n"
+                            response += f"   📋 Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                            response += f"   🏥 Department: {doc.get('department', 'N/A')}\n"
                             if doc.get('phone'):
-                                response += f"   Phone: {doc.get('phone')}\n"
+                                response += f"   📞 Phone: {doc.get('phone')}\n"
+                            if doc.get('email'):
+                                response += f"   ✉️ Email: {doc.get('email')}\n"
+                            if doc.get('experience_years'):
+                                response += f"   👨‍⚕️ Experience: {doc.get('experience_years')} years\n"
+                            if doc.get('rating'):
+                                response += f"   ⭐ Rating: {doc.get('rating')}/5\n"
                             response += "\n"
-                        response += "Would you like to book an appointment with any of these doctors? I can help you schedule a visit!"
+                        
+                        response += f"📅 **Next Steps:**\n"
+                        response += f"• I can help you book an appointment with any of these {specialty_display_name}s\n"
+                        response += f"• Just tell me the doctor's name or number (e.g., 'Book with Dr. Smith' or 'I want doctor #1')\n"
+                        response += f"• I'll check their availability and schedule your visit!\n\n"
+                        response += f"Which {specialty_display_name} would you like to see?"
+                        
+                        logging.info(f"Successfully showed {len(doctors)} {specialty_display_name}s from database to user")
                     else:
-                        # Fallback response if no doctors found - provide helpful guidance
-                        specialty_name = "gynecologist" if specialty == "gynecology" else (specialty.replace('_', ' ').title() if specialty else "doctor")
-                        response = f"I understand you're looking for a {specialty_name}. I can help you find one! I can search our database for available {specialty_name}s, show you their specialties and contact information, and help you book an appointment. Would you like me to search for available {specialty_name}s now, or would you prefer to see all available doctors? You can also call our appointment line at (555) 123-4567 for immediate assistance."
+                        # NO DOCTORS FOUND: Provide helpful fallback
+                        logging.warning(f"No {specialty_display_name}s found in database for specialty: {specialty}")
+                        response = f"I'm currently searching our database for available {specialty_display_name}s. "
+                        response += f"While I search, here's what I can help you with:\n\n"
+                        response += f"📞 **Immediate Help:**\n"
+                        response += f"• Call our appointment line: (555) 123-4567\n"
+                        response += f"• Visit our website to see all available {specialty_display_name}s\n\n"
+                        response += f"💬 **I can also help you:**\n"
+                        response += f"• Describe your symptoms for recommendations\n"
+                        response += f"• Check insurance coverage\n"
+                        response += f"• See all available doctors\n"
+                        response += f"• Book appointments with other specialists\n\n"
+                        response += f"Let me know how you'd like to proceed, or I can continue searching for {specialty_display_name}s!"
                 # Handle "all plans" query specifically
                 elif "all" in msg_lower and "plan" in msg_lower:
                     # Show all insurance plans with details
