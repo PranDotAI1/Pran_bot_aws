@@ -1464,18 +1464,22 @@ class AWSBedrockChat(Action):
             # NOTE: msg_lower is already defined above, but we redefine it here for clarity
             msg_lower_check = user_message.lower()
             
-            # Direct insurance query detection - check FIRST before LLM Router
-            # Be very explicit about insurance queries
-            is_insurance_query = (
-                "insurance" in msg_lower_check and 
-                not any(word in msg_lower_check for word in ["doctor", "physician", "specialist", "medical professional", "appointment with"])
-            ) or any(phrase in msg_lower_check for phrase in [
+            # Direct insurance query detection - SIMPLE and EXPLICIT
+            # Check if message contains "insurance" AND doesn't contain doctor-related words
+            has_insurance_word = "insurance" in msg_lower_check
+            has_doctor_word = any(word in msg_lower_check for word in ["doctor", "physician", "specialist", "medical professional"])
+            
+            # Also check for explicit insurance phrases
+            explicit_insurance_phrases = [
                 "i want insurance", "want insurance", "need insurance",
                 "insurance plan", "insurance plans", 
                 "can you help me with insurance", "help me with insurance",
                 "show me insurance", "show insurance plans",
                 "insurance coverage", "insurance benefits", "insurance premium"
-            ])
+            ]
+            has_explicit_phrase = any(phrase in msg_lower_check for phrase in explicit_insurance_phrases)
+            
+            is_insurance_query = (has_insurance_word or has_explicit_phrase) and not has_doctor_word
             
             if is_insurance_query:
                 logging.info("Direct insurance query detected - handling immediately")
