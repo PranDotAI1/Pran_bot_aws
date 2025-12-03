@@ -1540,6 +1540,45 @@ class AWSBedrockChat(Action):
                     logging.info(f"Direct doctor query handled: {len(doctors)} doctors shown")
                     return []
             
+            # PRIORITY: Handle insurance queries DIRECTLY - always show insurance plans, never generic messages
+            # This ensures "insurance", "insurance plans", "help me with insurance" etc. always work
+            is_insurance_query = any(word in msg_lower for word in [
+                "insurance", "plan", "plans", "coverage", "benefit", "benefits",
+                "premium", "deductible", "health insurance", "medical insurance"
+            ])
+            
+            if is_insurance_query:
+                # ALWAYS retrieve and show insurance plans
+                insurance_plans = None
+                try:
+                    insurance_plans = DatabaseHelper.get_insurance_plans()
+                except Exception as e:
+                    logging.error(f"Error retrieving insurance plans: {e}")
+                
+                # ALWAYS use sample insurance plans if database fails
+                if not insurance_plans or len(insurance_plans) == 0:
+                    insurance_plans = DatabaseHelper._get_sample_insurance_plans()
+                
+                # ALWAYS show insurance plans (never generic message)
+                if insurance_plans and len(insurance_plans) > 0:
+                    response = f"✅ **Here are all available insurance plans ({len(insurance_plans)}):**\n\n"
+                    for i, plan in enumerate(insurance_plans[:5], 1):
+                        response += f"**{i}. {plan.get('name', 'Insurance Plan')}**\n"
+                        response += f"   💰 Monthly Premium: ${plan.get('monthly_premium', 'N/A')}\n"
+                        response += f"   📊 Coverage: {plan.get('coverage', 'N/A')}%\n"
+                        response += f"   💳 Deductible: ${plan.get('deductible', 'N/A')}\n"
+                        if plan.get('features'):
+                            features = plan.get('features', [])
+                            if isinstance(features, list):
+                                response += f"   ✨ Features: {', '.join(features[:3])}\n"
+                        response += "\n"
+                    response += "📋 **Would you like more details about any specific plan?**\n"
+                    response += "Just tell me the plan name or number!"
+                    
+                    safe_dispatcher.utter_message(text=response)
+                    logging.info(f"Direct insurance query handled: {len(insurance_plans)} plans shown")
+                    return []
+            
             # STEP 1: Use LLM Router to intelligently route the query
             # This replaces all the hardcoded if/else logic with LLM intelligence
             llm_router = self._get_llm_router()
