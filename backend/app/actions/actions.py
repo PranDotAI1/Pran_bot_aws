@@ -1294,12 +1294,16 @@ class AWSBedrockChat(Action):
             has_explicit_phrase = any(phrase in msg_lower for phrase in explicit_insurance_phrases)
             is_insurance_query = (has_insurance_word or has_explicit_phrase) and not has_doctor_word
             
+            logging.info(f"PRIORITY 0: Checking insurance query - has_insurance_word={has_insurance_word}, has_doctor_word={has_doctor_word}, has_explicit_phrase={has_explicit_phrase}, is_insurance_query={is_insurance_query}")
+            
             if is_insurance_query:
                 logging.info("PRIORITY 0: Direct insurance query detected - handling immediately")
                 try:
                     insurance_plans = DatabaseHelper.get_insurance_plans()
+                    logging.info(f"PRIORITY 0: Retrieved {len(insurance_plans) if insurance_plans else 0} insurance plans from database")
                     if not insurance_plans:
                         insurance_plans = DatabaseHelper._get_sample_insurance_plans()
+                        logging.info(f"PRIORITY 0: Using {len(insurance_plans)} sample insurance plans")
                     
                     if insurance_plans and len(insurance_plans) > 0:
                         response = f"✅ **Here are all available insurance plans ({len(insurance_plans)}):**\n\n"
@@ -1331,12 +1335,16 @@ class AWSBedrockChat(Action):
                         response += "Just tell me the plan name or number!"
                         
                         safe_dispatcher.utter_message(text=response)
-                        logging.info(f"PRIORITY 0: Displayed {len(insurance_plans)} insurance plans")
+                        logging.info(f"PRIORITY 0: Displayed {len(insurance_plans)} insurance plans - RETURNING []")
                         return []
+                    else:
+                        logging.error("PRIORITY 0: No insurance plans available!")
                 except Exception as e:
                     logging.error(f"PRIORITY 0: Direct insurance handler failed: {e}")
                     import traceback
                     logging.error(traceback.format_exc())
+            else:
+                logging.info(f"PRIORITY 0: Not an insurance query, continuing to other handlers")
             
             # Get conversation history for intelligent responses
             conversation_history = []
