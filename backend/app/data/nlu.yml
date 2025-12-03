@@ -1,6 +1,39 @@
 version: "3.1"
 
 nlu:
+- intent: affirm
+  examples: |
+    - yes
+    - yeah
+    - yep
+    - sure
+    - ok
+    - okay
+    - correct
+    - right
+    - absolutely
+    - that's right
+    - affirmative
+    - uh huh
+    - let's do it
+    - sounds good
+    - of course
+    - certainly
+    - indeed
+    - definitely
+
+- intent: deny
+  examples: |
+    - no
+    - nope
+    - not really
+    - no thanks
+    - not now
+    - never
+    - I don't think so
+    - don't like that
+    - no way
+    - not really
   - intent: aws_bedrock_chat
     examples: |
       - Hello

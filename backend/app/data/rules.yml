@@ -15,6 +15,12 @@ rules:
       - action: action_aws_bedrock_chat
       - action: action_listen
   
+  - rule: Handle affirmative responses
+    steps:
+      - intent: affirm
+      - action: action_aws_bedrock_chat
+      - action: action_listen
+  
   - rule: Handle NLU fallback with intelligent response
     steps:
       - intent: nlu_fallback

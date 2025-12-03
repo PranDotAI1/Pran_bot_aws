@@ -1,6 +1,8 @@
 version: "3.1"
 
 intents:
+  - affirm
+  - deny
   - aws_bedrock_chat
   - book_appointment
   - describe_problem
