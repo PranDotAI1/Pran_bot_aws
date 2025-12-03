@@ -59,9 +59,9 @@ class LLMRouter:
             context_str = self._format_context(retrieved_context, available_data)
             history_str = self._format_history(conversation_history)
             
-            prompt = f"""You are an intelligent healthcare assistant router. Analyze the user's query and determine the best action.
+            prompt = f"""You are a SUPER INTELLIGENT healthcare assistant router. Analyze the user's query CAREFULLY and determine the EXACT intent.
 
-USER QUERY: {user_message}
+USER QUERY: "{user_message}"
 
 CONVERSATION HISTORY:
 {history_str}
@@ -69,9 +69,17 @@ CONVERSATION HISTORY:
 AVAILABLE DATA CONTEXT:
 {context_str}
 
+CRITICAL INSTRUCTIONS:
+- If user asks about "insurance", "insurance plans", "plans" (in insurance context) → action MUST be "show_insurance"
+- If user asks about "doctors", "physicians", "specialists" → action MUST be "show_doctors"
+- If user mentions symptoms → action MUST be "analyze_symptoms"
+- UNDERSTAND CONTEXT: "Show me insurance plans" means INSURANCE, not doctors
+- "plans" alone after insurance context means INSURANCE PLANS
+- Be VERY PRECISE - don't confuse insurance with doctors
+
 AVAILABLE ACTIONS:
-1. show_doctors - Show doctors from database
-2. show_insurance - Show insurance plans
+1. show_doctors - Show doctors from database (use when user wants doctors, physicians, specialists)
+2. show_insurance - Show insurance plans (use when user wants insurance, plans, coverage, premiums)
 3. book_appointment - Help book appointment
 4. analyze_symptoms - Analyze symptoms and recommend doctors
 5. general_response - General helpful response
@@ -82,13 +90,21 @@ DATABASE DATA AVAILABLE:
 - appointments: {len(retrieved_context.get('appointments', [])) if retrieved_context else 0} appointments
 
 INSTRUCTIONS:
-1. Determine the user's intent
-2. Select the appropriate action
-3. Extract parameters (specialty, urgency, etc.)
-4. Determine if database data is needed
-5. Generate response template
+1. Read the user query CAREFULLY
+2. Determine the EXACT intent (insurance vs doctors vs symptoms)
+3. Select the CORRECT action (be precise!)
+4. Extract parameters (specialty, urgency, etc.)
+5. Set needs_data=true if you need to retrieve data
+6. Set data_type to "doctors" or "insurance" or "appointments"
 
-Respond in JSON format:
+EXAMPLES:
+- "Show me insurance plans" → action: "show_insurance", data_type: "insurance"
+- "insurance" → action: "show_insurance", data_type: "insurance"
+- "plans" (after insurance context) → action: "show_insurance", data_type: "insurance"
+- "suggest me some doctors" → action: "show_doctors", data_type: "doctors"
+- "I need a gynecologist" → action: "show_doctors", data_type: "doctors", specialty: "gynecology"
+
+Respond in JSON format ONLY:
 {{
     "action": "action_name",
     "parameters": {{
@@ -99,7 +115,7 @@ Respond in JSON format:
     }},
     "needs_data": true/false,
     "data_type": "doctors|insurance|appointments|none",
-    "response_template": "Template for response (use {{doctors}}, {{plans}} placeholders)",
+    "response_template": "Template for response",
     "explanation": "Why this action was chosen"
 }}
 
