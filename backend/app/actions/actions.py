@@ -689,6 +689,10 @@ Try asking: What services do you offer? or How do I book an appointment?"""
 class AWSBedrockChat(Action):
     """Super intelligent RAG-powered chatbot with AWS services for conversational responses"""
     
+    # Class-level tracking to prevent duplicate responses
+    _last_message_id = None
+    _last_response_sent = False
+    
     def __init__(self):
         # Lazy initialization - only create services when needed
         # This allows simple queries to work even if AWS services fail
@@ -738,6 +742,18 @@ class AWSBedrockChat(Action):
             user_message = tracker.latest_message.get("text", "")
             sender_id = tracker.sender_id
             msg_lower = user_message.lower()
+            
+            # Create unique message ID to prevent duplicate processing
+            message_id = f"{sender_id}_{user_message}_{len(tracker.events)}"
+            
+            # Guard: Prevent duplicate responses for the same message
+            if AWSBedrockChat._last_message_id == message_id and AWSBedrockChat._last_response_sent:
+                logging.warning(f"Duplicate call detected for message: '{user_message}', skipping")
+                return []
+            
+            # Mark this message as being processed
+            AWSBedrockChat._last_message_id = message_id
+            AWSBedrockChat._last_response_sent = False
             
             logging.info(f"action_aws_bedrock_chat called with message: '{user_message}'")
             
@@ -1218,8 +1234,14 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                 pass  # Ignore errors - non-critical
             
             # Send response (only once) - ensure response is not empty
+            # Double-check guard to prevent duplicates
+            if AWSBedrockChat._last_response_sent:
+                logging.warning(f"Response already sent for message: '{user_message}', skipping duplicate")
+                return []
+            
             if response and response.strip():
                 dispatcher.utter_message(text=response)
+                AWSBedrockChat._last_response_sent = True
                 logging.info(f"action_aws_bedrock_chat returning response: {response[:100]}...")
             else:
                 # Last resort fallback - provide helpful response based on message
@@ -1232,6 +1254,7 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                     fallback_response = "I'm here to help with all your healthcare needs - appointments, insurance, health questions, medications, and more. What would you like to know?"
                 
                 dispatcher.utter_message(text=fallback_response)
+                AWSBedrockChat._last_response_sent = True
                 logging.warning(f"action_aws_bedrock_chat: Response was empty, using fallback: {fallback_response[:50]}...")
             
             return []
@@ -1254,8 +1277,11 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                 else:
                     error_response = "Hello! I'm Dr. AI, your healthcare assistant. I can help with appointments, insurance, health questions, and more. How can I assist you today?"
                 
-                dispatcher.utter_message(text=error_response)
-                logging.info(f"action_aws_bedrock_chat: Error handled, returning fallback response")
+                # Guard: Only send error response if not already sent
+                if not AWSBedrockChat._last_response_sent:
+                    dispatcher.utter_message(text=error_response)
+                    AWSBedrockChat._last_response_sent = True
+                    logging.info(f"action_aws_bedrock_chat: Error handled, returning fallback response")
                 return []
             except Exception as e2:
                 logging.error(f"Error in final fallback: {e2}")
