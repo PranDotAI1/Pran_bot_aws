@@ -379,19 +379,29 @@ class IntelligentFallback:
         """Provide intelligent fallback responses for ANY query type with context"""
         msg_lower = user_message.lower()
         
-        # Check conversation context for follow-up questions
+            # Check conversation context for follow-up questions
         is_followup = False
         previous_topic = None
         if conversation_context:
-            for msg in reversed(conversation_context[-3:]):  # Check last 3 messages
+            for msg in reversed(conversation_context[-5:]):  # Check last 5 messages for better context
                 if msg.get("role") == "assistant":
                     prev_text = msg.get("content", "").lower()
-                    if "appointment" in prev_text:
+                    if "appointment" in prev_text or "schedule" in prev_text or "book" in prev_text:
                         previous_topic = "appointment"
-                    elif "insurance" in prev_text:
+                    elif "insurance" in prev_text or "plan" in prev_text or "coverage" in prev_text:
                         previous_topic = "insurance"
-                    elif "doctor" in prev_text or "specialist" in prev_text:
+                    elif "doctor" in prev_text or "specialist" in prev_text or "physician" in prev_text:
                         previous_topic = "doctor"
+                    elif "symptom" in prev_text or "health" in prev_text or "medical" in prev_text:
+                        previous_topic = "health"
+                    elif "medication" in prev_text or "medicine" in prev_text or "drug" in prev_text:
+                        previous_topic = "medication"
+                    elif "lab" in prev_text or "test" in prev_text or "result" in prev_text:
+                        previous_topic = "lab"
+                    elif "bill" in prev_text or "payment" in prev_text or "cost" in prev_text:
+                        previous_topic = "billing"
+                    elif "wellness" in prev_text or "diet" in prev_text or "exercise" in prev_text:
+                        previous_topic = "wellness"
                     break
         
         # Health/Symptom related
@@ -460,12 +470,40 @@ Would you like more details about any specific plan, or would you like personali
             return "I can help you book an appointment! I can schedule new appointments, find doctors by specialty or symptoms, check available time slots, reschedule or cancel appointments, and set up reminders. To get started, tell me your symptoms or preferred specialty, and I'll find the right doctor and show available times. Would you like to book an appointment now?"
         
         # Medication related
-        elif any(word in msg_lower for word in ["medication", "medicine", "drug", "prescription", "pill"]):
+        elif any(word in msg_lower for word in ["medication", "medicine", "drug", "prescription", "pill", "tablet", "dose", "dosage", "side effect", "interaction"]):
             return "I can help with medication questions! I can check drug interactions, calculate proper dosages, create medication schedules, identify potential side effects, and help with medication management. Important: Always consult your doctor before changing medications, never stop medications without medical advice, and keep a list of all medications you're taking. What medication question can I help with?"
         
+        # Lab results and medical records
+        elif any(word in msg_lower for word in ["lab", "test", "result", "report", "blood test", "x-ray", "scan", "medical record", "report", "diagnosis"]):
+            return "I can help you access and understand your lab results, medical reports, test results, and medical records! I can explain what your test results mean, help you understand your diagnosis, access your medical history, and guide you on next steps. Would you like me to help you access your lab results or medical records?"
+        
+        # Billing and payment
+        elif any(word in msg_lower for word in ["bill", "billing", "payment", "cost", "price", "charge", "invoice", "statement", "pay", "fee"]):
+            return "I can help with billing and payment questions! I can show you billing statements, explain charges, help with payment plans, verify insurance coverage for procedures, provide cost estimates, and assist with payment processing. What billing question can I help with?"
+        
+        # Emergency and urgent care
+        elif any(word in msg_lower for word in ["emergency", "urgent", "immediate", "critical", "severe", "acute", "911", "ambulance"]):
+            return "For medical emergencies, please call 911 or go to your nearest emergency room immediately. For urgent but non-emergency situations, I can help you find urgent care centers, assess the urgency of your symptoms, and guide you on when to seek immediate care. If this is a life-threatening emergency, please call 911 now. Otherwise, tell me about your symptoms and I'll help you determine the best course of action."
+        
+        # Mental health
+        elif any(word in msg_lower for word in ["mental", "depression", "anxiety", "stress", "therapy", "counselor", "psychologist", "psychiatrist", "mental health", "emotional"]):
+            return "I can help with mental health support! I can provide mental health assessments (GAD-7 for anxiety, PHQ-9 for depression), help you find mental health professionals, provide resources for stress management, and guide you to appropriate care. For mental health crises, please contact a crisis hotline or seek immediate professional help. How can I assist you with mental health support?"
+        
+        # Wellness and lifestyle
+        elif any(word in msg_lower for word in ["wellness", "diet", "exercise", "fitness", "nutrition", "sleep", "weight", "lifestyle", "healthy", "wellbeing"]):
+            return "I can help with wellness and lifestyle! I can provide personalized diet recommendations, exercise plans, sleep hygiene tips, weight management guidance, nutrition advice, and overall wellness strategies. I can also help you set health goals and track your progress. What aspect of wellness would you like help with?"
+        
+        # Hospital and location services
+        elif any(word in msg_lower for word in ["hospital", "location", "clinic", "address", "where", "nearby", "near me", "facility"]):
+            return "I can help you find hospitals, clinics, and healthcare facilities! I can show you locations, addresses, contact information, hours of operation, and services available at each location. I can also help you find the nearest facility based on your location. What type of facility are you looking for?"
+        
+        # Patient services and support
+        elif any(word in msg_lower for word in ["patient", "service", "support", "help desk", "customer service", "assistance"]):
+            return "I'm here to help with all patient services! I can assist with registration, medical records access, appointment scheduling, insurance verification, billing questions, medication management, and general healthcare guidance. What patient service can I help you with today?"
+        
         # General greeting or help
-        elif any(word in msg_lower for word in ["hi", "hello", "help", "services", "what can you"]):
-            return "Hello! I'm Dr. AI, your healthcare assistant. I'm here to help with all your healthcare needs! I can assist with medical services (symptom assessment, emergency evaluation, mental health screening), appointments (book, reschedule, find doctors), insurance (verify coverage, compare plans), medications (check interactions, dosages), patient services, wellness plans, and hospital information. How can I help you today? You can say 'I need to book an appointment', 'What insurance plans do you have?', 'I have [symptoms]', or 'Help me find a doctor'. What would you like to do?"
+        elif any(word in msg_lower for word in ["hi", "hello", "hey", "greetings", "help", "services", "what can you", "capabilities", "what do you do"]):
+            return "Hello! I'm Dr. AI, your super intelligent healthcare assistant. I'm here to help with ALL your healthcare needs! I can assist with:\n\n• Medical Services: Symptom assessment, emergency evaluation, mental health screening\n• Appointments: Book, reschedule, find doctors by specialty\n• Insurance: Verify coverage, compare plans, explain benefits\n• Medications: Check interactions, dosages, schedules\n• Lab Results: Access and understand test results\n• Billing: View statements, payment plans, cost estimates\n• Wellness: Diet, exercise, sleep, lifestyle guidance\n• Patient Services: Records, registration, support\n• And much more!\n\nHow can I help you today? You can ask me anything about healthcare!"
         
         # Default helpful response - intelligent for ANY query
         else:
@@ -560,16 +598,26 @@ WELLNESS & SUPPORT:
 - Country Services: Location-specific healthcare services
 
 YOUR INTELLIGENCE GUIDELINES:
-- Answer ANY question about ANY of these services intelligently
-- When asked about appointments, provide detailed scheduling guidance
-- When asked about insurance, explain coverage, plans, and benefits clearly
-- When asked about health/symptoms, provide medical guidance and recommendations
-- When asked about medications, explain interactions, dosages, and safety
-- Always be empathetic, clear, and helpful
+- Answer ANY question about ANY of these services intelligently and comprehensively
+- Understand context from previous messages and maintain conversation flow
+- When asked about appointments, provide detailed scheduling guidance, show available doctors, and help book
+- When asked about insurance, explain coverage, plans, benefits, costs, and provide recommendations
+- When asked about health/symptoms, provide medical guidance, recommend appropriate doctors, and suggest next steps
+- When asked about medications, explain interactions, dosages, safety, and provide medication management help
+- When asked about lab results, help interpret results, explain what they mean, and guide on next steps
+- When asked about billing, explain charges, show statements, help with payment plans, and verify coverage
+- When asked about emergencies, assess urgency, provide immediate guidance, and direct to appropriate care
+- When asked about mental health, provide support, assessments, and help find mental health professionals
+- When asked about wellness, provide personalized diet, exercise, sleep, and lifestyle recommendations
+- When asked about locations, help find hospitals, clinics, and healthcare facilities nearby
+- When asked about patient services, help with registration, records, support, and general assistance
+- Always be empathetic, clear, helpful, and comprehensive
 - Ask clarifying questions when needed to provide the best assistance
 - Guide users to the right service or API when appropriate
-- Provide comprehensive, actionable information
+- Provide detailed, actionable information for every query type
 - Remember conversation context across multiple exchanges
+- Handle follow-up questions intelligently based on previous conversation
+- Never say "I don't know" - always provide helpful guidance or direct to appropriate resources
 
 RESPONSE STYLE:
 - Be conversational, warm, and professional
@@ -1058,6 +1106,27 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                         else:
                             response = "I understand you have health concerns. I can help you find the right doctor based on your symptoms and book an appointment. Would you like me to search for available doctors?"
                 
+                # Lab results and medical records
+                elif any(word in msg_lower for word in ["lab", "test", "result", "report", "blood test", "x-ray", "scan", "medical record", "diagnosis"]):
+                    response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+                # Billing and payment
+                elif any(word in msg_lower for word in ["bill", "billing", "payment", "cost", "price", "charge", "invoice", "statement", "pay", "fee"]):
+                    response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+                # Emergency and urgent care
+                elif any(word in msg_lower for word in ["emergency", "urgent", "immediate", "critical", "severe", "acute", "911", "ambulance"]):
+                    response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+                # Mental health
+                elif any(word in msg_lower for word in ["mental", "depression", "anxiety", "stress", "therapy", "counselor", "psychologist", "psychiatrist", "mental health", "emotional"]):
+                    response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+                # Wellness and lifestyle
+                elif any(word in msg_lower for word in ["wellness", "diet", "exercise", "fitness", "nutrition", "sleep", "weight", "lifestyle", "healthy", "wellbeing"]):
+                    response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+                # Hospital and location services
+                elif any(word in msg_lower for word in ["hospital", "location", "clinic", "address", "where", "nearby", "near me", "facility"]):
+                    response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+                # Patient services
+                elif any(word in msg_lower for word in ["patient", "service", "support", "help desk", "customer service", "assistance"]):
+                    response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
                 elif any(word in msg_lower for word in ["insurance", "plan", "coverage"]):
                     # Use intelligent fallback with context
                     response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
@@ -1181,6 +1250,10 @@ Please provide a comprehensive, intelligent response based on the retrieved cont
                         # Fallback response if no doctors found - provide helpful guidance
                         specialty_name = "gynecologist" if specialty == "gynecology" else (specialty.replace('_', ' ').title() if specialty else "doctor")
                         response = f"I understand you're looking for a {specialty_name}. I can help you find one! I can search our database for available {specialty_name}s, show you their specialties and contact information, and help you book an appointment. Would you like me to search for available {specialty_name}s now, or would you prefer to see all available doctors? You can also call our appointment line at (555) 123-4567 for immediate assistance."
+                # Handle "all plans" query specifically
+                elif "all" in msg_lower and "plan" in msg_lower:
+                    # Direct to insurance plans action
+                    response = "I can show you all available insurance plans! Let me retrieve the complete list of insurance plans with details about coverage, premiums, and benefits. Would you like me to show you all available insurance plans?"
                 else:
                     # Use intelligent fallback with context (always provides response)
                     response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
