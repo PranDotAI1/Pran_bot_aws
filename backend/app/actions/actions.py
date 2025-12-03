@@ -108,21 +108,21 @@ class SafeDispatcher:
         """Delegate all other attributes to the original dispatcher"""
         return getattr(self.dispatcher, name)
 
-# Database configuration
+# Database configuration with fallback to known hospital database
 DB_CONFIG = {
-    'host': os.getenv('AURORA_ENDPOINT') or os.getenv('DB_HOST'),
-    'database': os.getenv('DB_NAME', 'postgres'),
+    'host': os.getenv('AURORA_ENDPOINT') or os.getenv('DB_HOST') or 'hospital.cv8wum284gev.us-east-1.rds.amazonaws.com',
+    'database': os.getenv('DB_NAME', 'hospital'),  # Changed default from 'postgres' to 'hospital'
     'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD'),
+    'password': os.getenv('DB_PASSWORD') or 'qMI8DUYcGnoTBpsyagh9',
     'port': int(os.getenv('DB_PORT', '5432'))
 }
 
-# Legacy RDS configuration
+# Legacy RDS configuration (points to same hospital database)
 RDS_CONFIG = {
-    'host': os.getenv('RDS_HOST'),
-    'database': 'pran_chatbot',
-    'user': 'admin',
-    'password': os.getenv('RDS_PASSWORD'),
+    'host': os.getenv('RDS_HOST') or 'hospital.cv8wum284gev.us-east-1.rds.amazonaws.com',
+    'database': 'hospital',  # Changed from 'pran_chatbot' to 'hospital'
+    'user': os.getenv('RDS_USER', 'postgres'),
+    'password': os.getenv('RDS_PASSWORD') or os.getenv('DB_PASSWORD') or 'qMI8DUYcGnoTBpsyagh9',
     'port': 5432
 }
 
@@ -338,44 +338,131 @@ class DatabaseHelper:
             
             for table_name in ['medical_doctors', 'doctors', 'physicians']:
                 try:
-                    query = f"SELECT doctor_id, name, specialty, department, email, phone FROM {table_name}"
+                    # First, detect available columns
+                    cursor.execute(f"""
+                        SELECT column_name 
+                        FROM information_schema.columns 
+                        WHERE table_name = '{table_name}'
+                    """)
+                    available_columns = [row[0] for row in cursor.fetchall()]
+                    
+                    if not available_columns:
+                        continue
+                    
+                    logging.info(f"Table {table_name} columns: {available_columns}")
+                    
+                    # Build SELECT clause based on available columns
+                    select_cols = []
+                    col_mapping = {}
+                    
+                    # doctor_id
+                    if 'doctor_id' in available_columns:
+                        select_cols.append('doctor_id')
+                    elif 'id' in available_columns:
+                        select_cols.append('id as doctor_id')
+                    else:
+                        select_cols.append('NULL as doctor_id')
+                    
+                    # name
+                    if 'name' in available_columns:
+                        select_cols.append('name')
+                    elif 'doctor_name' in available_columns:
+                        select_cols.append('doctor_name as name')
+                    else:
+                        select_cols.append("'Unknown' as name")
+                    
+                    # specialty (map from doc_type if needed)
+                    if 'specialty' in available_columns:
+                        select_cols.append('specialty')
+                    elif 'doc_type' in available_columns:
+                        select_cols.append('doc_type as specialty')
+                        col_mapping['specialty_col'] = 'doc_type'
+                    elif 'specialization' in available_columns:
+                        select_cols.append('specialization as specialty')
+                    else:
+                        select_cols.append("'General Medicine' as specialty")
+                    
+                    # department
+                    if 'department' in available_columns:
+                        select_cols.append('department')
+                    elif 'doc_type' in available_columns:
+                        select_cols.append('doc_type as department')
+                    else:
+                        select_cols.append("'General Medicine' as department")
+                    
+                    # email
+                    if 'email' in available_columns:
+                        select_cols.append('email')
+                    else:
+                        select_cols.append("'info@hospital.com' as email")
+                    
+                    # phone
+                    if 'phone' in available_columns:
+                        select_cols.append('phone')
+                    elif 'phone_number' in available_columns:
+                        select_cols.append('phone_number as phone')
+                    elif 'contact' in available_columns:
+                        select_cols.append('contact as phone')
+                    else:
+                        select_cols.append("'(555) 123-4567' as phone")
+                    
+                    # experience_years
+                    if 'experience_years' in available_columns:
+                        select_cols.append('experience_years')
+                    elif 'experience' in available_columns:
+                        select_cols.append('experience as experience_years')
+                    else:
+                        select_cols.append('NULL as experience_years')
+                    
+                    # rating
+                    if 'rating' in available_columns:
+                        select_cols.append('rating')
+                    else:
+                        select_cols.append('NULL as rating')
+                    
+                    query = f"SELECT {', '.join(select_cols)} FROM {table_name}"
                     where_conditions = []
                     params = []
                     
                     # Check if is_active column exists
-                    try:
-                        cursor.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name='{table_name}' AND column_name='is_active'")
-                        if cursor.fetchone():
-                            where_conditions.append("is_active = true")
-                    except:
-                        pass
+                    if 'is_active' in available_columns:
+                        where_conditions.append("is_active = true")
                     
                     if specialty:
-                        # Handle general medicine with multiple search terms
-                        if specialty.lower() == "general medicine":
-                            where_conditions.append("(specialty ILIKE %s OR department ILIKE %s OR specialty ILIKE %s OR department ILIKE %s OR specialty ILIKE %s)")
-                            params.extend(["%general%", "%general%", "%family%", "%family%", "%primary%"])
-                        else:
-                            where_conditions.append("(specialty ILIKE %s OR department ILIKE %s)")
-                            params.append(f"%{specialty}%")
-                            params.append(f"%{specialty}%")
+                        # Use actual column name for specialty filtering
+                        specialty_col = col_mapping.get('specialty_col', 'specialty')
+                        if specialty_col in available_columns:
+                            # Handle general medicine with multiple search terms
+                            if specialty.lower() == "general medicine":
+                                where_conditions.append(f"({specialty_col} ILIKE %s OR {specialty_col} ILIKE %s OR {specialty_col} ILIKE %s OR {specialty_col} ILIKE %s)")
+                                params.extend(["%general%", "%family%", "%primary%", "%gp%"])
+                            else:
+                                where_conditions.append(f"{specialty_col} ILIKE %s")
+                                params.append(f"%{specialty}%")
                     
-                    if department:
+                    if department and 'department' in available_columns:
                         where_conditions.append("department ILIKE %s")
                         params.append(f"%{department}%")
                     
                     if where_conditions:
                         query += " WHERE " + " AND ".join(where_conditions)
                     
-                    query += f" ORDER BY name LIMIT {limit}"
+                    # Add ORDER BY if name column exists
+                    if 'name' in available_columns or 'doctor_name' in available_columns:
+                        query += f" ORDER BY name LIMIT {limit}"
+                    else:
+                        query += f" LIMIT {limit}"
                     
+                    logging.info(f"Executing query: {query} with params: {params}")
                     cursor.execute(query, params if params else None)
                     doctors = cursor.fetchall()
                     table_found = True
                     logging.info(f"Successfully queried {table_name} table, found {len(doctors) if doctors else 0} doctors")
                     break
                 except Exception as table_error:
-                    logging.debug(f"Table {table_name} not found or query failed: {table_error}")
+                    logging.error(f"Table {table_name} query failed: {table_error}")
+                    import traceback
+                    logging.error(traceback.format_exc())
                     continue
             
             if not table_found:
@@ -390,9 +477,12 @@ class DatabaseHelper:
                     'specialty': d[2],
                     'department': d[3],
                     'email': d[4],
-                    'phone': d[5]
+                    'phone': d[5],
+                    'experience_years': d[6] if len(d) > 6 else None,
+                    'rating': d[7] if len(d) > 7 else None
                 } for d in doctors]
                 cursor.close()
+                logging.info(f"Returning {len(result)} doctors from database")
                 return result
             else:
                 logging.warning(f"No doctors found in database for specialty: {specialty}, using sample data")
