@@ -1299,12 +1299,54 @@ class AWSBedrockChat(Action):
             
             if is_insurance_query:
                 logging.info("PRIORITY 0: INSURANCE QUERY DETECTED - EXECUTING HANDLER")
-                logging.info("PRIORITY 0: Direct insurance query detected - handling immediately")
                 try:
-                    insurance_plans = DatabaseHelper.get_insurance_plans()
-                    logging.info(f"PRIORITY 0: Retrieved {len(insurance_plans) if insurance_plans else 0} insurance plans from database")
-                    if not insurance_plans:
-                        insurance_plans = DatabaseHelper._get_sample_insurance_plans()
+                    # Try to get from database first
+                    insurance_plans = None
+                    try:
+                        insurance_plans = DatabaseHelper.get_insurance_plans()
+                        logging.info(f"PRIORITY 0: Retrieved {len(insurance_plans) if insurance_plans else 0} insurance plans from database")
+                    except Exception as db_error:
+                        logging.warning(f"PRIORITY 0: Database query failed: {db_error}, using sample data")
+                    
+                    # Always use sample data as fallback if database fails or returns nothing
+                    if not insurance_plans or len(insurance_plans) == 0:
+                        insurance_plans = [
+                            {
+                                "name": "Basic Health Plan",
+                                "monthly_premium": "$150.00",
+                                "deductible": "$1000.00",
+                                "coverage": "80%",
+                                "features": ["Primary care", "Emergency visits", "Basic prescriptions"]
+                            },
+                            {
+                                "name": "Premium Health Plan",
+                                "monthly_premium": "$300.00",
+                                "deductible": "$500.00",
+                                "coverage": "90%",
+                                "features": ["All basic features", "Specialist visits", "Mental health", "Dental & Vision"]
+                            },
+                            {
+                                "name": "Family Health Plan",
+                                "monthly_premium": "$450.00",
+                                "deductible": "$750.00",
+                                "coverage": "85%",
+                                "features": ["All premium features", "Family coverage", "Maternity care", "Pediatric care"]
+                            },
+                            {
+                                "name": "Senior Care Plan",
+                                "monthly_premium": "$250.00",
+                                "deductible": "$600.00",
+                                "coverage": "88%",
+                                "features": ["Senior-specific care", "Chronic disease management", "Prescription coverage"]
+                            },
+                            {
+                                "name": "Student Health Plan",
+                                "monthly_premium": "$120.00",
+                                "deductible": "$800.00",
+                                "coverage": "75%",
+                                "features": ["Basic health services", "Mental health support", "Preventive care"]
+                            }
+                        ]
                         logging.info(f"PRIORITY 0: Using {len(insurance_plans)} sample insurance plans")
                     
                     if insurance_plans and len(insurance_plans) > 0:
