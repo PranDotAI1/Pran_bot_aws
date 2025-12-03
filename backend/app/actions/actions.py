@@ -862,22 +862,23 @@ class AWSBedrockChat(Action):
         user_message = tracker.latest_message.get("text", "")
         sender_id = tracker.sender_id
         
-        # Prevent multiple executions for the same message within 2 seconds
+        # Prevent multiple executions for the same message within 0.5 seconds (very short window)
+        # This prevents rapid duplicates but allows legitimate follow-up messages
         message_hash = hashlib.md5(f"{sender_id}_{user_message}".encode()).hexdigest()
         current_time = time.time()
         
         with AWSBedrockChat._execution_lock:
             if message_hash in AWSBedrockChat._execution_tracker:
                 last_time = AWSBedrockChat._execution_tracker[message_hash]
-                if current_time - last_time < 2:  # 2 second window
+                if current_time - last_time < 0.5:  # 0.5 second window - very short to prevent rapid duplicates only
                     logging.warning(f"Preventing duplicate execution for message: '{user_message[:50]}...' from sender {sender_id}")
                     return []  # Return empty to prevent duplicate execution
             
             AWSBedrockChat._execution_tracker[message_hash] = current_time
             
-            # Clean up old entries (older than 10 seconds)
+            # Clean up old entries (older than 5 seconds)
             for mhash in list(AWSBedrockChat._execution_tracker.keys()):
-                if current_time - AWSBedrockChat._execution_tracker[mhash] > 10:
+                if current_time - AWSBedrockChat._execution_tracker[mhash] > 5:
                     del AWSBedrockChat._execution_tracker[mhash]
         
         safe_dispatcher = SafeDispatcher(dispatcher, sender_id, user_message)
@@ -1011,6 +1012,30 @@ class AWSBedrockChat(Action):
                         response += "Would you like more details about any specific plan, or personalized recommendations based on your needs?"
                         safe_dispatcher.utter_message(text=response)
                         logging.info(f"action_aws_bedrock_chat: Handled 'yes' for insurance, found {len(insurance_plans)} plans")
+                        return []
+                    else:
+                        # Fallback for insurance
+                        response = "I can help you with insurance! I can show you available plans, explain coverage options, and help you choose the right plan. Would you like me to show you our insurance plans?"
+                        safe_dispatcher.utter_message(text=response)
+                        logging.info("action_aws_bedrock_chat: Handled 'yes' for insurance, but no plans found")
+                        return []
+                
+                # Fallback for "yes" that doesn't match specific conditions
+                else:
+                    # Use intelligent fallback to provide helpful response
+                    try:
+                        response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+                        if not response or len(response) < 20:
+                            response = "I'm here to help! Could you please tell me more about what you need? For example:\n• 'I need to find a doctor'\n• 'I want to book an appointment'\n• 'I need help with insurance'\n• 'I have [symptoms]'\n\nWhat can I help you with?"
+                        safe_dispatcher.utter_message(text=response)
+                        logging.info("action_aws_bedrock_chat: Handled generic 'yes' with fallback")
+                        return []
+                    except Exception as e:
+                        logging.error(f"Error in yes fallback: {e}")
+                        # Ensure we still send a response
+                        response = "I'm here to help! Could you please tell me more about what you need? For example:\n• 'I need to find a doctor'\n• 'I want to book an appointment'\n• 'I need help with insurance'\n• 'I have [symptoms]'\n\nWhat can I help you with?"
+                        safe_dispatcher.utter_message(text=response)
+                        logging.info("action_aws_bedrock_chat: Handled generic 'yes' with error fallback")
                         return []
             
             # Try to use AWS Bedrock for intelligent conversational responses
