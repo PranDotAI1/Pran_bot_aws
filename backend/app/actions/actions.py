@@ -1580,11 +1580,37 @@ class AWSBedrockChat(Action):
                         plans = retrieved_context['insurance_plans']
                         response = f"✅ **Here are all available insurance plans ({len(plans)}):**\n\n"
                         for i, plan in enumerate(plans[:5], 1):
-                            response += f"**{i}. {plan.get('name')}**\n"
-                            response += f"   Monthly Premium: ${plan.get('monthly_premium')}\n"
-                            response += f"   Coverage: {plan.get('coverage')}%\n"
-                            response += f"   Deductible: ${plan.get('deductible')}\n\n"
-                        response += "Would you like more details about any specific plan?"
+                            response += f"**{i}. {plan.get('name', 'Insurance Plan')}**\n"
+                            # monthly_premium is already formatted as "$150" from database
+                            premium = plan.get('monthly_premium', 'N/A')
+                            if isinstance(premium, str) and not premium.startswith('$'):
+                                premium = f"${premium}"
+                            response += f"   💰 Monthly Premium: {premium}\n"
+                            
+                            # coverage is already formatted as "80%" from database
+                            coverage = plan.get('coverage', 'N/A')
+                            if isinstance(coverage, (int, float)):
+                                coverage = f"{int(coverage)}%"
+                            elif isinstance(coverage, str) and not coverage.endswith('%'):
+                                coverage = f"{coverage}%"
+                            response += f"   📊 Coverage: {coverage}\n"
+                            
+                            # deductible is already formatted as "$1000" from database
+                            deductible = plan.get('deductible', 'N/A')
+                            if isinstance(deductible, str) and not deductible.startswith('$'):
+                                deductible = f"${deductible}"
+                            response += f"   💳 Deductible: {deductible}\n"
+                            
+                            # Features
+                            features = plan.get('features', [])
+                            if features:
+                                if isinstance(features, list):
+                                    response += f"   ✨ Features: {', '.join(features[:3])}\n"
+                                elif isinstance(features, str):
+                                    response += f"   ✨ Features: {features}\n"
+                            response += "\n"
+                        response += "📋 **Would you like more details about any specific plan?**\n"
+                        response += "Just tell me the plan name or number!"
                         
                         safe_dispatcher.utter_message(text=response)
                         logging.info(f"LLM Router: Displayed {len(plans)} insurance plans directly")
