@@ -30,5 +30,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:5055/health || exit 1
 
 # Start actions server
-CMD ["python", "-m", "rasa_sdk", "--actions", "actions", "--port", "5055"]
+CMD ["rasa-sdk", "--actions", "actions", "--port", "5055"]
 
