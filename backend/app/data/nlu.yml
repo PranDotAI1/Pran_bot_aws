@@ -57,6 +57,25 @@ nlu:
       - I need insurance
       - want insurance
       - help me with insurance
+      - Show me all insurance plans
+      - What insurance options do you have?
+      - I want to see insurance plans
+      - Display insurance plans
+      - List insurance plans
+      - Tell me about insurance
+      - I'm looking for insurance
+      - Can I see insurance plans?
+      - What are my insurance options?
+      - Show available insurance
+      - I need health insurance
+      - I want health insurance
+      - Show me health insurance plans
+      - What health insurance do you offer?
+      - I'm interested in insurance
+      - Tell me about your insurance plans
+      - What insurance coverage is available?
+      - I want to compare insurance plans
+      - Show me different insurance options
       - What are the side effects of aspirin?
       - Can you tell me about common flu symptoms?
       - How do I know if I have food poisoning?
@@ -390,6 +409,28 @@ nlu:
       - I need insurance
       - want insurance
       - help me with insurance
+      - Show me all insurance plans
+      - List all insurance plans
+      - What insurance plans do you have?
+      - Display all insurance options
+      - I want to see all insurance plans
+      - Tell me about insurance plans
+      - Show available insurance plans
+      - What are my insurance choices?
+      - I'm looking for insurance plans
+      - Can you show insurance plans?
+      - I need to see insurance options
+      - Show me the insurance plans available
+      - What insurance can I get?
+      - I want to know about insurance plans
+      - Show me your insurance plans
+      - List insurance plans for me
+      - Display the insurance plans
+      - I need insurance information
+      - Show insurance coverage plans
+      - What insurance plans are there?
+      - I want insurance plan details
+      - Show me insurance plan options
 
   - intent: request_insurance_suggestions
     examples: |
@@ -430,6 +471,39 @@ nlu:
       - I want to see a family doctor
       - Show me general physicians available
       - Help me find a general doctor
+      - Show me doctors list
+      - List doctors
+      - Find doctors
+      - I need a doctor
+      - I want to see doctors
+      - Show available doctors
+      - What doctors are there?
+      - Display doctors
+      - I'm looking for a doctor
+      - Find me a doctor
+      - Show me all doctors available
+      - I need to find a doctor
+      - Can you show me doctors?
+      - I want to see a doctor
+      - Show doctors near me
+      - List all available doctors
+      - I need a psychiatrist
+      - Find me a neurologist
+      - I need a pediatrician
+      - Show me pediatricians
+      - Find a cardiologist
+      - I need an orthopedic doctor
+      - Show me orthopedists
+      - Find me a dermatologist
+      - I need a gynecologist
+      - Show me gynecologists
+      - Find a urologist
+      - I need an ophthalmologist
+      - Show me eye doctors
+      - Find me a gastroenterologist
+      - I need a pulmonologist
+      - Show me endocrinologists
+      - Find me an oncologist
 
   - intent: request_nearby_hospitals
     examples: |

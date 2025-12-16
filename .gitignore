@@ -4,101 +4,45 @@ __pycache__/
 *$py.class
 *.so
 .Python
-*.egg-info/
-dist/
-build/
-*.egg
-venv/
 env/
+venv/
 ENV/
-rasa_env/
-.venv
+.venv/
 
-# Logs
-*.log
-*.pid
-streamlit*.log
-lt_*.log
-
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+# Rasa
+models/*.tar.gz
+.rasa/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
+
+# Logs
+*.log
+*.txt
+
+# OS
+.DS_Store
+Thumbs.db
 
 # Temporary files
-*.zip
-*.tmp
-*.bak
-*.backup
+*_temp.py
+*_test.py
+cleanup_*.py
 
-# Node modules (if any)
+# Node modules
 node_modules/
 
-# Environment variables
+# Build
+build/
+dist/
+*.egg-info/
+
+# Environment
 .env
 .env.local
-*.env
 
 # AWS
 .aws/
-*.pem
-
-# Terraform
-.terraform/
-*.tfstate
-*.tfstate.*
-.terraform.lock.hcl
-terraform/
-terraform
-
-# Virtual environments
-venv/
-env/
-ENV/
-rasa_env/
-.venv
-django_env/
-api_backend/django_env/
-backend/rasa_env/
-
-# Documentation duplicates (keep only README.md and docs/)
-# ALL_*.md
-# COMPLETE_*.md
-# DEPLOYMENT_*.md
-# etc. - will be handled manually
-
-# Test files
-test_*.py
-*_test.py
-
-# Build artifacts
-*.tar.gz
-models/*.tar.gz
-!backend/app/models/.gitkeep
-
-# Rasa cache
-.rasa/
-backend/app/.rasa/
-**/.rasa/
-
-# Large binary files
-*.zip
-
-# Deployment logs
-deployment_output.log
-*.log
-
-# AWS deployment
-aws-deployment/terraform/.terraform/
-aws-deployment/terraform-simple/.terraform/

@@ -50,9 +50,9 @@ set +e
 echo "Running: rasa train --force --skip-validation --out /app/models"
 echo "This may take 1-2 minutes with optimized config (3 epochs)..."
 
-# Run training with timeout (15 minutes max) and better error handling
+# Run training with timeout (10 minutes max) and better error handling
 echo "Training started at $(date)"
-timeout 900 rasa train --force --skip-validation --out /app/models 2>&1 | tee /tmp/training.log
+timeout 600 rasa train --force --skip-validation --out /app/models 2>&1 | tee /tmp/training.log
 TRAIN_EXIT=$?
 
 echo "Training finished at $(date)"
