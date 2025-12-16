@@ -98,12 +98,6 @@ slots:
     mappings:
       - type: from_entity
         entity: time
-  last_shown_insurance_plans:
-    type: bool
-    initial_value: false
-    influence_conversation: true
-    mappings:
-      - type: custom
 
 forms:
   appointment_form:
