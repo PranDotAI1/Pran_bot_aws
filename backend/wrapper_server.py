@@ -43,36 +43,36 @@ mongodb_client = None
 mongodb_db = None
 
 def connect_mongodb():
- """Connect to MongoDB database"""
- global mongodb_client, mongodb_db
- 
- if not MONGODB_URI:
- logger.warning("MONGODB_URI not configured. MongoDB features will be disabled.")
- return False
- 
- try:
- mongodb_client = MongoClient(
- MONGODB_URI,
- serverSelectionTimeoutMS=5000,
- connectTimeoutMS=5000
- )
-    # Test the connection
-    mongodb_client.admin.command('ping')
-    # Get the default database (specify database name to avoid ConfigurationError)
-    mongodb_db = mongodb_client.get_database('chatbot')  # Use 'chatbot' as default database name
-    logger.info(f"Successfully connected to MongoDB at {mongodb_client.address}")
-    return True
-except (ConnectionFailure, ServerSelectionTimeoutError) as e:
-    logger.error(f"MongoDB connection error: {e}")
-    mongodb_client = None
-    mongodb_db = None
-    return False
-except Exception as e:
-    logger.error(f"MongoDB configuration error: {e}")
-    logger.info("MongoDB is optional - continuing without MongoDB")
-    mongodb_client = None
-    mongodb_db = None
-    return False
+    """Connect to MongoDB database"""
+    global mongodb_client, mongodb_db
+    
+    if not MONGODB_URI:
+        logger.warning("MONGODB_URI not configured. MongoDB features will be disabled.")
+        return False
+    
+    try:
+        mongodb_client = MongoClient(
+            MONGODB_URI,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000
+        )
+        # Test the connection
+        mongodb_client.admin.command('ping')
+        # Get the default database (specify database name to avoid ConfigurationError)
+        mongodb_db = mongodb_client.get_database('chatbot')  # Use 'chatbot' as default database name
+        logger.info(f"Successfully connected to MongoDB at {mongodb_client.address}")
+        return True
+    except (ConnectionFailure, ServerSelectionTimeoutError) as e:
+        logger.error(f"MongoDB connection error: {e}")
+        mongodb_client = None
+        mongodb_db = None
+        return False
+    except Exception as e:
+        logger.error(f"MongoDB configuration error: {e}")
+        logger.info("MongoDB is optional - continuing without MongoDB")
+        mongodb_client = None
+        mongodb_db = None
+        return False
 
 # Connect to MongoDB on startup if URI is provided (but don't fail if it doesn't work)
 if MONGODB_URI:
