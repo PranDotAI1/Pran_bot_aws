@@ -71,22 +71,53 @@ The system uses PostgreSQL with the following main tables:
 - **lab_results**: Laboratory test results
 - **availability_slots**: Doctor availability management
 
-## Setup Instructions
+## Quick Start
+
+### For AWS Amplify Deployment (Recommended)
+
+**Want to deploy this chatbot to AWS Amplify?** Follow our comprehensive guide:
+
+📘 **[Complete AWS Amplify Deployment Guide](AMPLIFY_DEPLOYMENT_GUIDE.md)**
+
+This guide includes:
+- Step-by-step AWS infrastructure setup (RDS, ECS, ECR)
+- Backend deployment on ECS Fargate
+- Frontend deployment on AWS Amplify
+- Environment configuration
+- Testing procedures
+- Troubleshooting tips
 
 ### Prerequisites
 
-- Python 3.10+
-- Node.js 14+
-- Docker (for containerization)
-- AWS CLI (for deployment)
-- PostgreSQL (for local development)
+- AWS Account with admin access
+- GitHub account
+- AWS CLI installed and configured
+- Docker installed
+- Python 3.10+ and Node.js 14+
 
-### Local Development
+### Quick Clone and Deploy
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/PranDotAI1/Pran_bot_aws.git
+cd Pran_bot_aws
+
+# 2. Follow the Amplify Deployment Guide
+# See AMPLIFY_DEPLOYMENT_GUIDE.md for complete instructions
+
+# 3. Set up backend infrastructure (RDS, ECS)
+# 4. Deploy frontend to Amplify
+# 5. Test your deployed chatbot
+```
+
+### Local Development (Optional)
+
+For local testing before deployment:
 
 1. **Clone the repository**
 ```bash
-git clone <repository-url>
-cd pran_chatbot-main
+git clone https://github.com/PranDotAI1/Pran_bot_aws.git
+cd Pran_bot_aws
 ```
 
 2. **Backend Setup**
@@ -262,9 +293,11 @@ For issues or questions:
 
 ## Documentation
 
-- [Deployment Guide](FINAL_DEPLOYMENT_STATUS.md)
-- [Database Documentation](DATABASE_COMPLETE_STATUS.md)
-- [Deployment Details](PERMANENT_DEPLOYMENT_COMPLETE.md)
+- 📘 **[AWS Amplify Deployment Guide](AMPLIFY_DEPLOYMENT_GUIDE.md)** - Complete deployment instructions
+- [Final Deployment Status](FINAL_DEPLOYMENT_STATUS.md) - Current deployment details
+- [Database Documentation](DATABASE_COMPLETE_STATUS.md) - Database schema and data
+- [Permanent Deployment Details](PERMANENT_DEPLOYMENT_COMPLETE.md) - Technical specifications
+- [Cleanup Summary](CLEANUP_SUMMARY.md) - Repository organization details
 
 ---
 
