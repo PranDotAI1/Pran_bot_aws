@@ -56,21 +56,30 @@ def connect_mongodb():
  serverSelectionTimeoutMS=5000,
  connectTimeoutMS=5000
  )
- # Test the connection
- mongodb_client.admin.command('ping')
- # Get the default database (or specify one)
- mongodb_db = mongodb_client.get_database()
- logger.info(f"Successfully connected to MongoDB at {mongodb_client.address}")
- return True
- except (ConnectionFailure, ServerSelectionTimeoutError) as e:
- logger.error(f"MongoDB connection error: {e}")
- mongodb_client = None
- mongodb_db = None
- return False
+    # Test the connection
+    mongodb_client.admin.command('ping')
+    # Get the default database (specify database name to avoid ConfigurationError)
+    mongodb_db = mongodb_client.get_database('chatbot')  # Use 'chatbot' as default database name
+    logger.info(f"Successfully connected to MongoDB at {mongodb_client.address}")
+    return True
+except (ConnectionFailure, ServerSelectionTimeoutError) as e:
+    logger.error(f"MongoDB connection error: {e}")
+    mongodb_client = None
+    mongodb_db = None
+    return False
+except Exception as e:
+    logger.error(f"MongoDB configuration error: {e}")
+    logger.info("MongoDB is optional - continuing without MongoDB")
+    mongodb_client = None
+    mongodb_db = None
+    return False
 
-# Connect to MongoDB on startup if URI is provided
+# Connect to MongoDB on startup if URI is provided (but don't fail if it doesn't work)
 if MONGODB_URI:
- connect_mongodb()
+    try:
+        connect_mongodb()
+    except Exception as e:
+        logger.warning(f"MongoDB connection failed, continuing without it: {e}")
 
 def get_mongodb_db(db_name=None):
  """Get MongoDB database instance"""
