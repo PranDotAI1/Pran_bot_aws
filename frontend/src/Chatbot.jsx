@@ -6,10 +6,12 @@ import './Chatbot.css';
  * Production-ready React component for integrating with PRAN Chatbot API
  * 
  * Usage:
- * <Chatbot apiUrl="http://pran-chatbot-alb-738129713.us-east-1.elb.amazonaws.com:8080/rasa-webhook" />
+ * <Chatbot />
+ * 
+ * Note: Uses Amplify proxy at /api/chatbot which routes to backend
  */
 const Chatbot = ({ 
-  apiUrl = 'http://pran-chatbot-alb-738129713.us-east-1.elb.amazonaws.com:8080/rasa-webhook',
+  apiUrl = '/api/chatbot',
   senderId = null,
   placeholder = "Type your message...",
   welcomeMessage = "Hi, how can I assist you today?",
