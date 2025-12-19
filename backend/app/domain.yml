@@ -139,7 +139,7 @@ responses:
     - text: "Here are all your appointments."
 
   utter_book_appointment:
-    - text: "I'd be happy to help you. Could you please tell me what symptoms or issues you're experiencing?"
+    - text: "I'd be happy to help you book an appointment! You can:\n\n• Tell me a specific doctor's name (e.g., 'book Dr. Lisa Anderson')\n• Tell me the specialty you need (e.g., 'book with a gynecologist')\n• Tell me your symptoms and I'll recommend the right doctor\n\nWhat would you like to do?"
 
   utter_cancel_appointment:
     - text: "Select the appointment you want to cancel."

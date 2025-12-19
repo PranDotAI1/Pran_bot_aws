@@ -413,8 +413,85 @@ class DatabaseHelper:
             DatabaseHelper.return_connection(conn)
     
     @staticmethod
-    def get_doctors(specialty=None, department=None, limit=10):
+    def get_doctor_by_name(doctor_name):
+        """Get a specific doctor by name (exact or partial match)"""
+        conn = DatabaseHelper.get_connection()
+        if not conn:
+            return None
+        
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SET statement_timeout = '3s'")
+            
+            # Clean doctor name - remove "Dr.", "dr.", extra spaces
+            clean_name = doctor_name.replace("Dr.", "").replace("dr.", "").strip()
+            
+            for table_name in ['medical_doctors', 'doctors', 'physicians']:
+                try:
+                    cursor.execute(f"""
+                        SELECT column_name 
+                        FROM information_schema.columns 
+                        WHERE table_name = '{table_name}'
+                    """)
+                    available_columns = [row[0] for row in cursor.fetchall()]
+                    
+                    if not available_columns:
+                        continue
+                    
+                    # Build query to search by name
+                    name_col = 'name' if 'name' in available_columns else ('doctor_name' if 'doctor_name' in available_columns else None)
+                    if not name_col:
+                        continue
+                    
+                    # Try exact match first, then partial match
+                    query = f"""
+                        SELECT doctor_id, {name_col} as name, 
+                               COALESCE(specialty, doc_type, specialization, 'General Medicine') as specialty,
+                               COALESCE(department, doc_type, 'General Medicine') as department,
+                               COALESCE(email, 'N/A') as email,
+                               COALESCE(phone, phone_number, contact, 'N/A') as phone,
+                               COALESCE(experience_years, experience, 0) as experience_years,
+                               COALESCE(rating, 0) as rating
+                        FROM {table_name}
+                        WHERE LOWER({name_col}) LIKE LOWER(%s)
+                        ORDER BY CASE WHEN LOWER({name_col}) = LOWER(%s) THEN 1 ELSE 2 END
+                        LIMIT 1
+                    """
+                    cursor.execute(query, (f"%{clean_name}%", clean_name))
+                    result = cursor.fetchone()
+                    
+                    if result:
+                        cursor.close()
+                        return {
+                            'doctor_id': result[0],
+                            'name': result[1],
+                            'specialty': result[2],
+                            'department': result[3],
+                            'email': result[4],
+                            'phone': result[5],
+                            'experience_years': result[6],
+                            'rating': result[7] if len(result) > 7 else None
+                        }
+                except Exception as e:
+                    logging.debug(f"Error searching {table_name} for doctor {doctor_name}: {e}")
+                    continue
+            
+            cursor.close()
+            return None
+        except Exception as e:
+            logging.error(f"Error in get_doctor_by_name: {e}")
+            return None
+    
+    @staticmethod
+    def get_doctors(specialty=None, department=None, doctor_name=None, limit=10):
         """Get doctors from database with timeout and fallback to sample data"""
+        # If doctor_name is provided, search by name first
+        if doctor_name:
+            doctor = DatabaseHelper.get_doctor_by_name(doctor_name)
+            if doctor:
+                return [doctor]
+            # If not found by name, continue with specialty search
+        
         conn = DatabaseHelper.get_connection()
         if not conn:
             logging.warning("Database connection not available, using sample data")
@@ -899,7 +976,23 @@ Would you like more details about any specific plan, or would you like personali
         # Appointment related
         elif any(word in msg_lower for word in ["appointment", "book", "schedule", "visit"]):
             if previous_topic == "appointment" or any(word in msg_lower for word in ["yes", "sure", "ok", "please", "help"]):
-                return "Perfect! To book an appointment, tell me your symptoms or preferred specialty, and I'll find the right doctor for you, show available time slots, and help you complete the booking. I can also help you reschedule or cancel existing appointments, and set up appointment reminders. What symptoms do you have or which specialty are you looking for?"
+                # Check if doctor name was already mentioned in conversation
+                doctor_mentioned = False
+                if conversation_context:
+                    for msg in conversation_context[-3:]:  # Check last 3 messages
+                        if msg.get('role') == 'user':
+                            msg_text = msg.get('content', '').lower()
+                            if 'dr.' in msg_text or 'doctor' in msg_text:
+                                # Extract doctor name if present
+                                import re
+                                if re.search(r'dr\.\s+[A-Z][a-z]+', msg_text, re.IGNORECASE):
+                                    doctor_mentioned = True
+                                    break
+                
+                if doctor_mentioned:
+                    return "Great! I found the doctor you mentioned. To complete your booking, please provide:\n\n• Your preferred date (e.g., 'tomorrow', 'December 20')\n• Your preferred time (e.g., '10 AM', '2:30 PM')\n\n**Just tell me the date and time, and I'll book your appointment!**"
+                else:
+                    return "Perfect! To book an appointment, you can:\n\n**Option 1:** Tell me a specific doctor's name\n   Example: 'book Dr. Lisa Anderson'\n\n**Option 2:** Tell me the specialty you need\n   Example: 'book with a gynecologist'\n\n**Option 3:** Tell me your symptoms\n   Example: 'I need to see a doctor for headaches'\n\n**What would you like to do?**"
             return "I can help you book an appointment! I can schedule new appointments, find doctors by specialty or symptoms, check available time slots, reschedule or cancel appointments, and set up reminders. To get started, tell me your symptoms or preferred specialty, and I'll find the right doctor and show available times. Would you like to book an appointment now?"
         
         # Medication related
@@ -2641,42 +2734,94 @@ Would you like detailed information about any specific plan?"""
                         # Use intelligent fallback with context
                         response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
                 elif any(word in msg_lower for word in ["appointment", "book", "schedule"]):
-                    # Check if specialty is mentioned in appointment request
-                    specialty = None
-                    if "cardiologist" in msg_lower or "cardiac" in msg_lower:
-                        specialty = "cardiology"
-                    elif "gynecologist" in msg_lower or "gynacologist" in msg_lower or "gynec" in msg_lower or "gynaec" in msg_lower:
-                        specialty = "gynecology"
-                    elif "neurologist" in msg_lower:
-                        specialty = "neurology"
-                    elif "dermatologist" in msg_lower:
-                        specialty = "dermatology"
-                    elif "pediatrician" in msg_lower:
-                        specialty = "pediatrics"
+                    # First, check if a specific doctor name is mentioned
+                    doctor_name = None
+                    # Extract doctor name patterns: "book Dr. X", "book Dr X", "book X", "schedule Dr. X"
+                    import re
+                    doctor_patterns = [
+                        r'(?:book|schedule|appointment with)\s+(?:Dr\.?\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
+                        r'Dr\.\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
+                    ]
+                    for pattern in doctor_patterns:
+                        match = re.search(pattern, user_message, re.IGNORECASE)
+                        if match:
+                            doctor_name = match.group(1).strip()
+                            break
                     
-                    if specialty:
-                        # Get doctors for the requested specialty
-                        doctors = None
+                    # If doctor name found, search for that specific doctor
+                    if doctor_name:
                         try:
-                            doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                            doctor = DatabaseHelper.get_doctor_by_name(doctor_name)
+                            if doctor:
+                                # Found the doctor - proceed with booking
+                                response = f"Perfect! I found **Dr. {doctor.get('name', doctor_name)}**.\n\n"
+                                response += f"**Specialty:** {doctor.get('specialty', 'General Medicine')}\n"
+                                response += f"**Department:** {doctor.get('department', 'N/A')}\n"
+                                if doctor.get('phone') and doctor.get('phone') != 'N/A':
+                                    response += f"**Phone:** {doctor.get('phone')}\n"
+                                response += "\n**To complete your booking, please provide:**\n"
+                                response += "• Your preferred date (e.g., 'tomorrow', 'December 20', 'next Monday')\n"
+                                response += "• Your preferred time (e.g., '10 AM', '2:30 PM', 'morning')\n\n"
+                                response += "**Just tell me the date and time, and I'll book your appointment!**"
+                            else:
+                                # Doctor not found - show helpful message
+                                response = f"I couldn't find a doctor named '{doctor_name}' in our system.\n\n"
+                                response += "**Would you like me to:**\n"
+                                response += "• Search for doctors by specialty?\n"
+                                response += "• Show you all available doctors?\n"
+                                response += "• Help you find a doctor for your symptoms?\n\n"
+                                response += "Please let me know how you'd like to proceed!"
                         except Exception as e:
-                            logging.debug(f"Could not fetch doctors: {e}")
-                        
-                        if doctors and len(doctors) > 0:
-                            specialty_name = specialty.replace('_', ' ').title()
-                            response = f"Great! I can help you book an appointment with a {specialty_name}. Here are available {specialty_name}s:\n\n"
-                            for i, doc in enumerate(doctors[:3], 1):
-                                response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
-                                response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
-                                if doc.get('phone'):
-                                    response += f"   Phone: {doc.get('phone')}\n"
-                                response += "\n"
-                            response += "Which doctor would you like to book an appointment with? Please provide the doctor's name or number, and I'll help you schedule."
-                        else:
-                            response = f"I can help you book an appointment with a {specialty.replace('_', ' ').title()}! Let me search for available doctors. Would you like me to find available {specialty.replace('_', ' ').title()}s for you?"
+                            logging.error(f"Error searching for doctor {doctor_name}: {e}")
+                            response = f"I'm having trouble finding Dr. {doctor_name}. Would you like me to search by specialty instead?"
                     else:
-                        # Use intelligent fallback with context
-                        response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
+                        # No specific doctor name - check if specialty is mentioned
+                        specialty = None
+                        if "cardiologist" in msg_lower or "cardiac" in msg_lower:
+                            specialty = "cardiology"
+                        elif "gynecologist" in msg_lower or "gynacologist" in msg_lower or "gynec" in msg_lower or "gynaec" in msg_lower:
+                            specialty = "gynecology"
+                        elif "neurologist" in msg_lower:
+                            specialty = "neurology"
+                        elif "dermatologist" in msg_lower:
+                            specialty = "dermatology"
+                        elif "pediatrician" in msg_lower:
+                            specialty = "pediatrics"
+                        
+                        if specialty:
+                            # Get doctors for the requested specialty
+                            doctors = None
+                            try:
+                                doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                            except Exception as e:
+                                logging.debug(f"Could not fetch doctors: {e}")
+                            
+                            if doctors and len(doctors) > 0:
+                                specialty_name = specialty.replace('_', ' ').title()
+                                response = f"Great! I can help you book an appointment with a {specialty_name}. Here are available {specialty_name}s:\n\n"
+                                for i, doc in enumerate(doctors[:5], 1):  # Show up to 5
+                                    response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                                    response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                                    if doc.get('phone'):
+                                        response += f"   Phone: {doc.get('phone')}\n"
+                                    response += "\n"
+                                response += "**To book an appointment, simply tell me:**\n"
+                                response += "• The doctor's name (e.g., 'book Dr. [Name]')\n"
+                                response += "• Or the doctor's number (e.g., 'book doctor 1')\n"
+                                response += "• Then provide your preferred date and time\n\n"
+                                response += "**Example:** 'book Dr. [Name] tomorrow at 10 AM'"
+                            else:
+                                response = f"I can help you book an appointment with a {specialty.replace('_', ' ').title()}! Let me search for available doctors. Would you like me to find available {specialty.replace('_', ' ').title()}s for you?"
+                        else:
+                            # Generic booking request - provide helpful guidance
+                            response = "I'd be happy to help you book an appointment! Here's how:\n\n"
+                            response += "**Option 1:** Tell me a specific doctor's name\n"
+                            response += "   Example: 'book Dr. Lisa Anderson'\n\n"
+                            response += "**Option 2:** Tell me the specialty you need\n"
+                            response += "   Example: 'book an appointment with a gynecologist'\n\n"
+                            response += "**Option 3:** Tell me your symptoms\n"
+                            response += "   Example: 'I need to see a doctor for headaches'\n\n"
+                            response += "**What would you like to do?**"
                 elif any(word in msg_lower for word in ["show", "all", "list", "available"]) and "doctor" in msg_lower:
                     # User wants to see all doctors - get all doctors from database
                     doctors = None
@@ -2744,108 +2889,151 @@ Would you like detailed information about any specific plan?"""
                             response += "4. Dr. Anjali Desai - Neurology - (555) 203-0001\n"
                             response += "5. Dr. Sneha Kapoor - Dermatology - (555) 204-0001\n\n"
                             response += "Would you like to book an appointment with any of these doctors?"
-                elif any(word in msg_lower for word in ["find", "doctor", "gynecologist", "gynacologist", "gynec", "gynaec", "obstetric", "specialist", "cardiologist", "neurologist", "dermatologist", "pediatrician", "orthopedic", "psychiatrist", "general physician", "general practitioner", "GP", "family doctor", "help me with", "need a", "is there any", "available doctor", "any doctor"]):
-                    # Handle doctor finding queries - ALWAYS get actual doctors from database
-                    specialty = None
-                    specialty_display_name = "doctor"
+                elif any(word in msg_lower for word in ["find", "doctor", "gynecologist", "gynacologist", "gynec", "gynaec", "obstetric", "specialist", "cardiologist", "neurologist", "dermatologist", "pediatrician", "orthopedic", "psychiatrist", "general physician", "general practitioner", "GP", "family doctor", "help me with", "need a", "is there any", "available doctor", "any doctor", "show me", "list"]):
+                    # First check if a specific doctor name is mentioned
+                    doctor_name = None
+                    import re
+                    # Extract doctor name patterns
+                    doctor_patterns = [
+                        r'Dr\.\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
+                        r'(?:find|show|list|need)\s+(?:Dr\.?\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
+                    ]
+                    for pattern in doctor_patterns:
+                        match = re.search(pattern, user_message, re.IGNORECASE)
+                        if match:
+                            doctor_name = match.group(1).strip()
+                            break
                     
-                    if "general physician" in msg_lower or "general practitioner" in msg_lower or "GP" in msg_lower or "family doctor" in msg_lower or "primary care" in msg_lower:
-                        specialty = "general medicine"
-                        specialty_display_name = "general physician"
-                    elif "gynecologist" in msg_lower or "gynec" in msg_lower or "obstetric" in msg_lower or "gyanocologist" in msg_lower or "gynaec" in msg_lower:
-                        specialty = "gynecology"
-                        specialty_display_name = "gynecologist"
-                    elif "cardiologist" in msg_lower or "cardiac" in msg_lower or "heart" in msg_lower:
-                        specialty = "cardiology"
-                        specialty_display_name = "cardiologist"
-                    elif "neurologist" in msg_lower or "neurology" in msg_lower or "neuro" in msg_lower:
-                        specialty = "neurology"
-                        specialty_display_name = "neurologist"
-                    elif "dermatologist" in msg_lower or "dermatology" in msg_lower or "skin" in msg_lower:
-                        specialty = "dermatology"
-                        specialty_display_name = "dermatologist"
-                    elif "pediatrician" in msg_lower or "pediatric" in msg_lower or "child" in msg_lower:
-                        specialty = "pediatrics"
-                        specialty_display_name = "pediatrician"
-                    elif "orthopedic" in msg_lower or "orthoped" in msg_lower or "bone" in msg_lower:
-                        specialty = "orthopedics"
-                        specialty_display_name = "orthopedic surgeon"
-                    elif "psychiatrist" in msg_lower or "psychiatry" in msg_lower:
-                        specialty = "psychiatry"
-                        specialty_display_name = "psychiatrist"
-                    
-                    # Try to get doctors from database - MULTIPLE ATTEMPTS for reliability
-                    doctors = None
-                    
-                    # Attempt 1: Use RAG retriever if available
-                    if rag_retriever and specialty:
+                    # If specific doctor name found, search for that doctor only
+                    if doctor_name:
                         try:
-                            doctors = rag_retriever.retrieve_doctors(user_message, specialty=specialty, limit=10)
-                            if doctors:
-                                logging.info(f"RAG: Retrieved {len(doctors)} {specialty_display_name}s from database")
+                            doctor = DatabaseHelper.get_doctor_by_name(doctor_name)
+                            if doctor:
+                                response = f"✅ **I found Dr. {doctor.get('name', doctor_name)}:**\n\n"
+                                response += f"**Specialty:** {doctor.get('specialty', 'General Medicine')}\n"
+                                response += f"**Department:** {doctor.get('department', 'N/A')}\n"
+                                if doctor.get('phone') and doctor.get('phone') != 'N/A':
+                                    response += f"**Phone:** {doctor.get('phone')}\n"
+                                if doctor.get('email') and doctor.get('email') != 'N/A':
+                                    response += f"**Email:** {doctor.get('email')}\n"
+                                if doctor.get('experience_years'):
+                                    response += f"**Experience:** {doctor.get('experience_years')} years\n"
+                                if doctor.get('rating'):
+                                    response += f"**Rating:** {doctor.get('rating')}/5\n"
+                                response += "\n**Would you like to book an appointment with Dr. " + doctor.get('name', doctor_name) + "?**\n"
+                                response += "Just tell me: 'book Dr. " + doctor.get('name', doctor_name) + "' and your preferred date/time!"
+                            else:
+                                response = f"I couldn't find a doctor named '{doctor_name}' in our system.\n\n"
+                                response += "**Would you like me to:**\n"
+                                response += "• Search by specialty instead?\n"
+                                response += "• Show all available doctors?\n"
+                                response += "• Help you find a doctor for your symptoms?"
                         except Exception as e:
-                            logging.debug(f"RAG retrieval failed: {e}")
-                    
-                    # Attempt 2: Use DatabaseHelper if RAG didn't work
-                    if not doctors or len(doctors) == 0:
-                        try:
-                            doctors = DatabaseHelper.get_doctors(specialty=specialty)
-                            if doctors:
-                                logging.info(f"DatabaseHelper: Retrieved {len(doctors)} {specialty_display_name}s from database")
-                        except Exception as e:
-                            logging.debug(f"DatabaseHelper retrieval failed: {e}")
-                    
-                    # Attempt 3: Try without specialty filter to get all doctors
-                    if not doctors or len(doctors) == 0:
-                        try:
-                            all_doctors = DatabaseHelper.get_doctors()  # Get all doctors
-                            if all_doctors and specialty:
-                                # Filter by specialty manually
-                                doctors = [d for d in all_doctors if specialty.lower() in str(d.get('specialty', '')).lower()]
-                                if doctors:
-                                    logging.info(f"Manual filter: Found {len(doctors)} {specialty_display_name}s")
-                        except Exception as e:
-                            logging.debug(f"Manual filtering failed: {e}")
-                    
-                    # BUILD RESPONSE with database results
-                    if doctors and len(doctors) > 0:
-                        # SUCCESS: Build detailed response with actual doctors from database
-                        response = f"✅ **I found {len(doctors)} {specialty_display_name}{'s' if len(doctors) > 1 else ''} in our database:**\n\n"
-                        for i, doc in enumerate(doctors[:5], 1):  # Show first 5
-                            response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
-                            response += f"   📋 Specialty: {doc.get('specialty', 'General Medicine')}\n"
-                            response += f"   🏥 Department: {doc.get('department', 'N/A')}\n"
-                            if doc.get('phone'):
-                                response += f"   📞 Phone: {doc.get('phone')}\n"
-                            if doc.get('email'):
-                                response += f"   ✉️ Email: {doc.get('email')}\n"
-                            if doc.get('experience_years'):
-                                response += f"   👨‍⚕️ Experience: {doc.get('experience_years')} years\n"
-                            if doc.get('rating'):
-                                response += f"   ⭐ Rating: {doc.get('rating')}/5\n"
-                            response += "\n"
-                        
-                        response += f"📅 **Next Steps:**\n"
-                        response += f"• I can help you book an appointment with any of these {specialty_display_name}s\n"
-                        response += f"• Just tell me the doctor's name or number (e.g., 'Book with Dr. Smith' or 'I want doctor #1')\n"
-                        response += f"• I'll check their availability and schedule your visit!\n\n"
-                        response += f"Which {specialty_display_name} would you like to see?"
-                        
-                        logging.info(f"Successfully showed {len(doctors)} {specialty_display_name}s from database to user")
+                            logging.error(f"Error searching for doctor {doctor_name}: {e}")
+                            response = f"I'm having trouble finding Dr. {doctor_name}. Would you like me to search by specialty instead?"
                     else:
-                        # NO DOCTORS FOUND: Provide helpful fallback
-                        logging.warning(f"No {specialty_display_name}s found in database for specialty: {specialty}")
-                        response = f"I'm currently searching our database for available {specialty_display_name}s. "
-                        response += f"While I search, here's what I can help you with:\n\n"
-                        response += f"📞 **Immediate Help:**\n"
-                        response += f"• Call our appointment line: (555) 123-4567\n"
-                        response += f"• Visit our website to see all available {specialty_display_name}s\n\n"
-                        response += f"💬 **I can also help you:**\n"
-                        response += f"• Describe your symptoms for recommendations\n"
-                        response += f"• Check insurance coverage\n"
-                        response += f"• See all available doctors\n"
-                        response += f"• Book appointments with other specialists\n\n"
-                        response += f"Let me know how you'd like to proceed, or I can continue searching for {specialty_display_name}s!"
+                        # No specific doctor name - search by specialty
+                        # Handle doctor finding queries - ALWAYS get actual doctors from database
+                        specialty = None
+                        specialty_display_name = "doctor"
+                        
+                        if "general physician" in msg_lower or "general practitioner" in msg_lower or "GP" in msg_lower or "family doctor" in msg_lower or "primary care" in msg_lower:
+                            specialty = "general medicine"
+                            specialty_display_name = "general physician"
+                        elif "gynecologist" in msg_lower or "gynec" in msg_lower or "obstetric" in msg_lower or "gyanocologist" in msg_lower or "gynaec" in msg_lower:
+                            specialty = "gynecology"
+                            specialty_display_name = "gynecologist"
+                        elif "cardiologist" in msg_lower or "cardiac" in msg_lower or "heart" in msg_lower:
+                            specialty = "cardiology"
+                            specialty_display_name = "cardiologist"
+                        elif "neurologist" in msg_lower or "neurology" in msg_lower or "neuro" in msg_lower:
+                            specialty = "neurology"
+                            specialty_display_name = "neurologist"
+                        elif "dermatologist" in msg_lower or "dermatology" in msg_lower or "skin" in msg_lower:
+                            specialty = "dermatology"
+                            specialty_display_name = "dermatologist"
+                        elif "pediatrician" in msg_lower or "pediatric" in msg_lower or "child" in msg_lower:
+                            specialty = "pediatrics"
+                            specialty_display_name = "pediatrician"
+                        elif "orthopedic" in msg_lower or "orthoped" in msg_lower or "bone" in msg_lower:
+                            specialty = "orthopedics"
+                            specialty_display_name = "orthopedic surgeon"
+                        elif "psychiatrist" in msg_lower or "psychiatry" in msg_lower:
+                            specialty = "psychiatry"
+                            specialty_display_name = "psychiatrist"
+                        
+                        # Try to get doctors from database - MULTIPLE ATTEMPTS for reliability
+                        doctors = None
+                        
+                        # Attempt 1: Use RAG retriever if available
+                        if rag_retriever and specialty:
+                            try:
+                                doctors = rag_retriever.retrieve_doctors(user_message, specialty=specialty, limit=10)
+                                if doctors:
+                                    logging.info(f"RAG: Retrieved {len(doctors)} {specialty_display_name}s from database")
+                            except Exception as e:
+                                logging.debug(f"RAG retrieval failed: {e}")
+                        
+                        # Attempt 2: Use DatabaseHelper if RAG didn't work
+                        if not doctors or len(doctors) == 0:
+                            try:
+                                doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                                if doctors:
+                                    logging.info(f"DatabaseHelper: Retrieved {len(doctors)} {specialty_display_name}s from database")
+                            except Exception as e:
+                                logging.debug(f"DatabaseHelper retrieval failed: {e}")
+                        
+                        # Attempt 3: Try without specialty filter to get all doctors
+                        if not doctors or len(doctors) == 0:
+                            try:
+                                all_doctors = DatabaseHelper.get_doctors()  # Get all doctors
+                                if all_doctors and specialty:
+                                    # Filter by specialty manually
+                                    doctors = [d for d in all_doctors if specialty.lower() in str(d.get('specialty', '')).lower()]
+                                    if doctors:
+                                        logging.info(f"Manual filter: Found {len(doctors)} {specialty_display_name}s")
+                            except Exception as e:
+                                logging.debug(f"Manual filtering failed: {e}")
+                        
+                        # BUILD RESPONSE with database results
+                        if doctors and len(doctors) > 0:
+                            # SUCCESS: Build detailed response with actual doctors from database
+                            response = f"✅ **I found {len(doctors)} {specialty_display_name}{'s' if len(doctors) > 1 else ''} in our database:**\n\n"
+                            for i, doc in enumerate(doctors[:5], 1):  # Show first 5
+                                response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                                response += f"   📋 Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                                response += f"   🏥 Department: {doc.get('department', 'N/A')}\n"
+                                if doc.get('phone'):
+                                    response += f"   📞 Phone: {doc.get('phone')}\n"
+                                if doc.get('email'):
+                                    response += f"   ✉️ Email: {doc.get('email')}\n"
+                                if doc.get('experience_years'):
+                                    response += f"   👨‍⚕️ Experience: {doc.get('experience_years')} years\n"
+                                if doc.get('rating'):
+                                    response += f"   ⭐ Rating: {doc.get('rating')}/5\n"
+                                response += "\n"
+                            
+                            response += f"📅 **Next Steps:**\n"
+                            response += f"• I can help you book an appointment with any of these {specialty_display_name}s\n"
+                            response += f"• Just tell me the doctor's name or number (e.g., 'Book with Dr. Smith' or 'I want doctor #1')\n"
+                            response += f"• I'll check their availability and schedule your visit!\n\n"
+                            response += f"Which {specialty_display_name} would you like to see?"
+                            
+                            logging.info(f"Successfully showed {len(doctors)} {specialty_display_name}s from database to user")
+                        else:
+                            # NO DOCTORS FOUND: Provide helpful fallback
+                            logging.warning(f"No {specialty_display_name}s found in database for specialty: {specialty}")
+                            response = f"I'm currently searching our database for available {specialty_display_name}s. "
+                            response += f"While I search, here's what I can help you with:\n\n"
+                            response += f"📞 **Immediate Help:**\n"
+                            response += f"• Call our appointment line: (555) 123-4567\n"
+                            response += f"• Visit our website to see all available {specialty_display_name}s\n\n"
+                            response += f"💬 **I can also help you:**\n"
+                            response += f"• Describe your symptoms for recommendations\n"
+                            response += f"• Check insurance coverage\n"
+                            response += f"• See all available doctors\n"
+                            response += f"• Book appointments with other specialists\n\n"
+                            response += f"Let me know how you'd like to proceed, or I can continue searching for {specialty_display_name}s!"
                 # Handle "all plans" query specifically
                 elif "all" in msg_lower and "plan" in msg_lower:
                     # Show all insurance plans with details
