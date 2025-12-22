@@ -879,16 +879,16 @@ class IntelligentFallback:
         # Health/Symptom related
         if any(word in msg_lower for word in ["cold", "cough", "fever", "headache", "pain", "sick", "symptom"]):
             if "cold" in msg_lower or "cough" in msg_lower:
-                return "I understand you're experiencing cold and cough symptoms. For immediate relief, rest, stay hydrated, and consider over-the-counter cold medications. Gargle with warm salt water for cough relief. If symptoms persist for more than 10 days, you have a high fever (over 101°F), difficulty breathing, or severe headache, please see a doctor. I can help you book an appointment with a doctor or find an ENT specialist. Would you like me to help you find a doctor or book an appointment?"
+                return "I understand you're experiencing cold and cough symptoms.\n\nFor immediate relief:\n1. Rest and stay hydrated\n2. Consider over-the-counter cold medications\n3. Gargle with warm salt water for cough relief\n\nSee a doctor if:\n1. Symptoms persist for more than 10 days\n2. You have a high fever (over 101°F)\n3. You have difficulty breathing\n4. You have severe headache\n\nI can help you book an appointment with a doctor or find an ENT specialist. Would you like me to help you find a doctor or book an appointment?"
             
             elif "headache" in msg_lower:
-                return "I understand you're experiencing a headache. Common causes include tension headaches, migraines, sinus issues, dehydration, or stress. If you have a sudden severe headache (worst of your life), headache with fever/stiff neck/confusion, headache after head injury, or vision changes, seek immediate care. I can help you book an appointment with a neurologist or general physician. Would you like me to find a doctor or schedule a consultation?"
+                return "I understand you're experiencing a headache.\n\nCommon causes:\n1. Tension headaches\n2. Migraines\n3. Sinus issues\n4. Dehydration\n5. Stress\n\nSeek immediate care if:\n1. Sudden severe headache (worst of your life)\n2. Headache with fever/stiff neck/confusion\n3. Headache after head injury\n4. Vision changes\n\nI can help you book an appointment with a neurologist or general physician. Would you like me to find a doctor or schedule a consultation?"
             
             elif "fever" in msg_lower:
-                return "I understand you have a fever. Normal body temperature is 98.6°F (37°C), fever is 100.4°F (38°C) or higher, and high fever is 103°F (39.4°C) or higher. Please see a doctor if your fever is over 103°F, lasts more than 3 days, or is accompanied by severe symptoms like rash, difficulty breathing, or confusion. For infants under 3 months, any fever requires immediate medical attention. I can help you book an appointment with a doctor or find available urgent care. Would you like me to help you schedule a consultation?"
+                return "I understand you have a fever.\n\nTemperature guide:\n1. Normal: 98.6°F (37°C)\n2. Fever: 100.4°F (38°C) or higher\n3. High fever: 103°F (39.4°C) or higher\n\nSee a doctor if:\n1. Fever is over 103°F\n2. Fever lasts more than 3 days\n3. Accompanied by severe symptoms (rash, difficulty breathing, confusion)\n4. For infants under 3 months, any fever requires immediate attention\n\nI can help you book an appointment with a doctor or find available urgent care. Would you like me to help you schedule a consultation?"
             
             else:
-                return "I understand you have health concerns. I can help you effectively! I can assist with booking appointments, finding the right specialist based on your symptoms, medication questions, locating nearby healthcare facilities, and symptom assessment. For your symptoms, I recommend describing them in detail, then I can help you find the right doctor and book an appointment for proper evaluation. Would you like me to help you find a doctor or book an appointment?"
+                return "I understand you have health concerns. I can help you:\n\n1. Book appointments\n2. Find the right specialist based on your symptoms\n3. Answer medication questions\n4. Locate nearby healthcare facilities\n5. Assess your symptoms\n\nTo get started:\n1. Describe your symptoms in detail\n2. I'll help you find the right doctor\n3. I'll help you book an appointment\n\nWould you like me to help you find a doctor or book an appointment?"
         
         # Insurance related
         elif any(word in msg_lower for word in ["insurance", "coverage", "plan", "benefit"]):
@@ -916,8 +916,8 @@ class IntelligentFallback:
 
 Would you like more details about any specific plan, or would you like personalized insurance recommendations based on your needs?"""
             elif previous_topic == "insurance" or any(word in msg_lower for word in ["yes", "sure", "ok", "please", "help"]):
-                return "Great! I can verify your insurance coverage, show available insurance plans, provide personalized recommendations, check benefits and coverage details, and help you understand costs and copays. To get started, tell me your insurance provider name, ask about specific coverage questions, or request insurance plan comparisons. What would you like to know about insurance?"
-            return "I can help you with insurance! I can verify your coverage, show available plans, provide personalized recommendations, check benefits, and explain costs and copays. To get started, tell me your insurance provider name or ask about specific coverage. What would you like to know about insurance?"
+                return "Great! I can help you with insurance:\n\n1. Verify your insurance coverage\n2. Show available insurance plans\n3. Provide personalized recommendations\n4. Check benefits and coverage details\n5. Help you understand costs and copays\n\nTo get started:\n1. Tell me your insurance provider name\n2. Ask about specific coverage questions\n3. Request insurance plan comparisons\n\nWhat would you like to know about insurance?"
+            return "I can help you with insurance:\n\n1. Verify your coverage\n2. Show available plans\n3. Provide personalized recommendations\n4. Check benefits\n5. Explain costs and copays\n\nTo get started:\n1. Tell me your insurance provider name\n2. Ask about specific coverage\n\nWhat would you like to know about insurance?"
         
         # Doctor finding related - ALWAYS show doctors
         elif any(word in msg_lower for word in ["find", "doctor", "gynecologist", "gynacologist", "gynec", "gynaec", "obstetric", "specialist", "cardiologist", "neurologist", "dermatologist", "pediatrician", "is there any", "available doctor", "any doctor"]):
@@ -950,28 +950,46 @@ Would you like more details about any specific plan, or would you like personali
             except:
                 doctors = DatabaseHelper._get_sample_doctors(specialty) if 'DatabaseHelper' in dir() else []
             
+            # Set department to match specialty for proper filtering
+            department = specialty if specialty else None
+            
+            # Get doctors from database or sample
+            try:
+                from .actions import DatabaseHelper
+                doctors = DatabaseHelper.get_doctors(specialty=specialty, department=department)
+                # Additional filter to ensure only requested department specialists
+                if doctors and specialty:
+                    doctors = [d for d in doctors if specialty.lower() in str(d.get('specialty', '')).lower() or specialty.lower() in str(d.get('department', '')).lower()]
+                if not doctors or len(doctors) == 0:
+                    doctors = DatabaseHelper._get_sample_doctors(specialty)
+            except:
+                doctors = DatabaseHelper._get_sample_doctors(specialty) if 'DatabaseHelper' in dir() else []
+            
             if doctors and len(doctors) > 0:
-                response = f"✅ **I found {len(doctors)} {specialty_name}{'s' if len(doctors) > 1 else ''}:**\n\n"
+                response = f"I found {len(doctors)} {specialty_name}{'s' if len(doctors) > 1 else ''}:\n\n"
                 for i, doc in enumerate(doctors[:5], 1):
-                    response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
-                    response += f"   📋 Specialty: {doc.get('specialty', doc.get('doc_type', specialty_name))}\n"
-                    response += f"   🏥 Department: {doc.get('department', 'General Medicine')}\n"
+                    response += f"{i}. Dr. {doc.get('name', 'N/A')}\n"
+                    response += f"   Specialty: {doc.get('specialty', doc.get('doc_type', specialty_name))}\n"
+                    response += f"   Department: {doc.get('department', 'General Medicine')}\n"
                     if doc.get('phone'):
-                        response += f"   📞 Phone: {doc.get('phone')}\n"
+                        response += f"   Phone: {doc.get('phone')}\n"
                     if doc.get('email'):
-                        response += f"   ✉️ Email: {doc.get('email')}\n"
+                        response += f"   Email: {doc.get('email')}\n"
                     if doc.get('experience_years') or doc.get('experience'):
                         exp = doc.get('experience_years') or doc.get('experience')
-                        response += f"   👨‍⚕️ Experience: {exp} years\n"
+                        response += f"   Experience: {exp} years\n"
                     if doc.get('rating'):
-                        response += f"   ⭐ Rating: {doc.get('rating')}/5\n"
+                        response += f"   Rating: {doc.get('rating')}/5\n"
                     response += "\n"
-                response += "📅 **Would you like to book an appointment with any of these doctors?**\n"
-                response += "Just tell me the doctor's name or number!"
+                response += "Next Steps:\n"
+                response += "1. Tell me the doctor's name (e.g., 'book Dr. [Name]' or just type the name)\n"
+                response += "2. Or tell me the doctor's number (e.g., 'book doctor 1')\n"
+                response += "3. Then provide your preferred date and time\n\n"
+                response += "Which doctor would you like to book with?"
                 return response
             else:
                 # Final fallback with sample doctors
-                return f"✅ **I found these {specialty_name}s for you:**\n\n1. Dr. Emily Williams - Gynecology - (555) 201-0002\n2. Dr. Priya Reddy - Gynecology - (555) 201-0001\n3. Dr. Kavita Nair - Gynecology - (555) 201-0003\n\nWould you like to book an appointment with any of these doctors?"
+                return f"I found these {specialty_name}s for you:\n\n1. Dr. Emily Williams - Gynecology - (555) 201-0002\n2. Dr. Priya Reddy - Gynecology - (555) 201-0001\n3. Dr. Kavita Nair - Gynecology - (555) 201-0003\n\nWould you like to book an appointment with any of these doctors?"
         
         # Appointment related
         elif any(word in msg_lower for word in ["appointment", "book", "schedule", "visit"]):
@@ -990,10 +1008,10 @@ Would you like more details about any specific plan, or would you like personali
                                     break
                 
                 if doctor_mentioned:
-                    return "Great! I found the doctor you mentioned. To complete your booking, please provide:\n\n• Your preferred date (e.g., 'tomorrow', 'December 20')\n• Your preferred time (e.g., '10 AM', '2:30 PM')\n\n**Just tell me the date and time, and I'll book your appointment!**"
+                    return "Great! I found the doctor you mentioned. To complete your booking, please provide:\n\n1. Your preferred date (e.g., 'tomorrow', 'December 20')\n2. Your preferred time (e.g., '10 AM', '2:30 PM')\n\nJust tell me the date and time, and I'll book your appointment!"
                 else:
-                    return "Perfect! To book an appointment, you can:\n\n**Option 1:** Tell me a specific doctor's name\n   Example: 'book Dr. Lisa Anderson'\n\n**Option 2:** Tell me the specialty you need\n   Example: 'book with a gynecologist'\n\n**Option 3:** Tell me your symptoms\n   Example: 'I need to see a doctor for headaches'\n\n**What would you like to do?**"
-            return "I can help you book an appointment! I can schedule new appointments, find doctors by specialty or symptoms, check available time slots, reschedule or cancel appointments, and set up reminders. To get started, tell me your symptoms or preferred specialty, and I'll find the right doctor and show available times. Would you like to book an appointment now?"
+                    return "Perfect! To book an appointment, you can:\n\n1. Tell me a specific doctor's name\n   Example: 'book Dr. Lisa Anderson' or just type 'Lisa Anderson'\n\n2. Tell me the specialty you need\n   Example: 'book with a gynecologist'\n\n3. Tell me your symptoms\n   Example: 'I need to see a doctor for headaches'\n\nWhat would you like to do?"
+            return "I can help you book an appointment! Here's how:\n\n1. Tell me your symptoms or preferred specialty\n2. I'll find the right doctor for you\n3. I'll show you available time slots\n4. You choose the date and time\n\nWould you like to book an appointment now?"
         
         # Medication related
         elif any(word in msg_lower for word in ["medication", "medicine", "drug", "prescription", "pill", "tablet", "dose", "dosage", "side effect", "interaction"]):
@@ -1614,7 +1632,7 @@ class AWSBedrockChat(Action):
                     try:
                         response = IntelligentFallback.get_fallback_response(user_message, conversation_history, retrieved_context)
                         if not response or len(response) < 20:
-                            response = "I'm here to help! Could you please tell me more about what you need? For example:\n• 'I need to find a doctor'\n• 'I want to book an appointment'\n• 'I need help with insurance'\n• 'I have [symptoms]'\n\nWhat can I help you with?"
+                            response = "I'm here to help! Could you please tell me more about what you need? For example:\n1. 'I need to find a doctor'\n2. 'I want to book an appointment'\n3. 'I need help with insurance'\n4. 'I have [symptoms]'\n\nWhat can I help you with?"
                         safe_dispatcher.utter_message(text=response)
                         logging.info("action_aws_bedrock_chat: Handled generic 'yes' with fallback")
                         return []
@@ -2417,29 +2435,29 @@ Would you like more details about any specific plan, or personalized recommendat
                             response = "Great! I can help you book an appointment. Here are available doctors:\n\n"
                             for i, doc in enumerate(doctors[:3], 1):
                                 response += f"{i}. Dr. {doc.get('name', 'N/A')} - {doc.get('specialty', 'General Medicine')}\n"
-                            response += "\nPlease tell me:\n• Which doctor you'd like to see\n• Your preferred date and time\n• Your symptoms or reason for visit\n\nI'll help you schedule the appointment!"
+                            response += "\nPlease tell me:\n1. Which doctor you'd like to see\n2. Your preferred date and time\n3. Your symptoms or reason for visit\n\nI'll help you schedule the appointment!"
                         else:
-                            response = "Great! To book an appointment, please tell me:\n• Your symptoms or preferred specialty\n• Preferred date and time (if any)\n• Any specific doctor preference\n\nI'll find the right doctor and show you available time slots."
+                            response = "Great! To book an appointment, please tell me:\n1. Your symptoms or preferred specialty\n2. Preferred date and time (if any)\n3. Any specific doctor preference\n\nI'll find the right doctor and show you available time slots."
                     
                     elif "lab" in context_lower or "test" in context_lower or "result" in context_lower:
                         # User said yes to lab results
-                        response = "I can help you access and understand your lab results! I can:\n• Retrieve your test results from our system\n• Explain what your results mean\n• Help you understand your diagnosis\n• Guide you on next steps\n\nWould you like me to retrieve your recent lab results, or do you have specific test results you'd like me to explain?"
+                        response = "I can help you access and understand your lab results:\n\n1. Retrieve your test results from our system\n2. Explain what your results mean\n3. Help you understand your diagnosis\n4. Guide you on next steps\n\nWould you like me to retrieve your recent lab results, or do you have specific test results you'd like me to explain?"
                     
                     elif "bill" in context_lower or "billing" in context_lower or "payment" in context_lower:
                         # User said yes to billing
-                        response = "I can help with billing! I can:\n• Show you billing statements\n• Explain charges and fees\n• Help with payment plans\n• Verify insurance coverage for procedures\n• Provide cost estimates\n\nWhat billing question can I help with? You can ask about a specific bill, payment options, or cost estimates."
+                        response = "I can help with billing:\n\n1. Show you billing statements\n2. Explain charges and fees\n3. Help with payment plans\n4. Verify insurance coverage for procedures\n5. Provide cost estimates\n\nWhat billing question can I help with? You can ask about a specific bill, payment options, or cost estimates."
                     
                     elif "wellness" in context_lower or "diet" in context_lower or "exercise" in context_lower or "fitness" in context_lower:
                         # User said yes to wellness
-                        response = "I can help with wellness! I can provide:\n• Personalized diet recommendations\n• Exercise and fitness plans\n• Sleep hygiene tips\n• Weight management guidance\n• Nutrition advice\n• Lifestyle recommendations\n\nWhat aspect of wellness would you like help with? For example, you can ask about diet plans, exercise routines, or sleep tips."
+                        response = "I can help with wellness:\n\n1. Personalized diet recommendations\n2. Exercise and fitness plans\n3. Sleep hygiene tips\n4. Weight management guidance\n5. Nutrition advice\n6. Lifestyle recommendations\n\nWhat aspect of wellness would you like help with? For example, you can ask about diet plans, exercise routines, or sleep tips."
                     
                     elif "mental" in context_lower or "therapy" in context_lower or "counselor" in context_lower:
                         # User said yes to mental health
-                        response = "I can help with mental health support! I can:\n• Provide mental health assessments (GAD-7 for anxiety, PHQ-9 for depression)\n• Help you find mental health professionals\n• Provide resources for stress management\n• Guide you to appropriate care\n\nFor mental health crises, please contact a crisis hotline or seek immediate professional help. How can I assist you with mental health support?"
+                        response = "I can help with mental health support:\n\n1. Provide mental health assessments (GAD-7 for anxiety, PHQ-9 for depression)\n2. Help you find mental health professionals\n3. Provide resources for stress management\n4. Guide you to appropriate care\n\nFor mental health crises, please contact a crisis hotline or seek immediate professional help. How can I assist you with mental health support?"
                     
                     elif "location" in context_lower or "hospital" in context_lower or "clinic" in context_lower:
                         # User said yes to locations
-                        response = "I can help you find healthcare facilities! I can:\n• Find hospitals and clinics near you\n• Show addresses and contact information\n• Check hours of operation\n• Show services available at each location\n\nWhat type of facility are you looking for? You can ask for hospitals, clinics, urgent care centers, or specific specialties."
+                        response = "I can help you find healthcare facilities:\n\n1. Find hospitals and clinics near you\n2. Show addresses and contact information\n3. Check hours of operation\n4. Show services available at each location\n\nWhat type of facility are you looking for? You can ask for hospitals, clinics, urgent care centers, or specific specialties."
                     
                     else:
                         # Generic yes - use intelligent fallback with RAG context
@@ -2736,16 +2754,30 @@ Would you like detailed information about any specific plan?"""
                 elif any(word in msg_lower for word in ["appointment", "book", "schedule"]):
                     # First, check if a specific doctor name is mentioned
                     doctor_name = None
-                    # Extract doctor name patterns: "book Dr. X", "book Dr X", "book X", "schedule Dr. X"
+                    # Extract doctor name patterns: "book Dr. X", "book Dr X", "book X", "schedule Dr. X", or just typed name
                     import re
                     doctor_patterns = [
-                        r'(?:book|schedule|appointment with)\s+(?:Dr\.?\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
+                        r'(?:book|schedule|appointment with|want|need)\s+(?:Dr\.?\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
                         r'Dr\.\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)',
+                        r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)$',  # Just a name (e.g., "Lisa Anderson")
+                        r'doctor\s+(\d+)',  # Doctor number (e.g., "doctor 1")
                     ]
                     for pattern in doctor_patterns:
                         match = re.search(pattern, user_message, re.IGNORECASE)
                         if match:
                             doctor_name = match.group(1).strip()
+                            # If it's a number, try to get doctor from conversation context
+                            if doctor_name.isdigit():
+                                # Check conversation history for doctor list
+                                if conversation_history:
+                                    for msg in reversed(conversation_history[-5:]):
+                                        if msg.get('role') == 'assistant':
+                                            content = msg.get('content', '')
+                                            # Try to extract doctor name from numbered list
+                                            num_match = re.search(rf'{doctor_name}\.\s+Dr\.\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', content, re.IGNORECASE)
+                                            if num_match:
+                                                doctor_name = num_match.group(1).strip()
+                                                break
                             break
                     
                     # If doctor name found, search for that specific doctor
@@ -2754,23 +2786,23 @@ Would you like detailed information about any specific plan?"""
                             doctor = DatabaseHelper.get_doctor_by_name(doctor_name)
                             if doctor:
                                 # Found the doctor - proceed with booking
-                                response = f"Perfect! I found **Dr. {doctor.get('name', doctor_name)}**.\n\n"
-                                response += f"**Specialty:** {doctor.get('specialty', 'General Medicine')}\n"
-                                response += f"**Department:** {doctor.get('department', 'N/A')}\n"
+                                response = f"Perfect! I found Dr. {doctor.get('name', doctor_name)}.\n\n"
+                                response += f"Specialty: {doctor.get('specialty', 'General Medicine')}\n"
+                                response += f"Department: {doctor.get('department', 'N/A')}\n"
                                 if doctor.get('phone') and doctor.get('phone') != 'N/A':
-                                    response += f"**Phone:** {doctor.get('phone')}\n"
-                                response += "\n**To complete your booking, please provide:**\n"
-                                response += "• Your preferred date (e.g., 'tomorrow', 'December 20', 'next Monday')\n"
-                                response += "• Your preferred time (e.g., '10 AM', '2:30 PM', 'morning')\n\n"
-                                response += "**Just tell me the date and time, and I'll book your appointment!**"
+                                    response += f"Phone: {doctor.get('phone')}\n"
+                                response += "\nTo complete your booking, please provide:\n"
+                                response += "1. Your preferred date (e.g., 'tomorrow', 'December 20', 'next Monday')\n"
+                                response += "2. Your preferred time (e.g., '10 AM', '2:30 PM', 'morning')\n\n"
+                                response += "Just tell me the date and time, and I'll book your appointment!"
                             else:
                                 # Doctor not found - show helpful message
                                 response = f"I couldn't find a doctor named '{doctor_name}' in our system.\n\n"
-                                response += "**Would you like me to:**\n"
-                                response += "• Search for doctors by specialty?\n"
-                                response += "• Show you all available doctors?\n"
-                                response += "• Help you find a doctor for your symptoms?\n\n"
-                                response += "Please let me know how you'd like to proceed!"
+                                response += "Would you like me to:\n"
+                                response += "1. Search for doctors by specialty?\n"
+                                response += "2. Show you all available doctors?\n"
+                                response += "3. Help you find a doctor for your symptoms?\n\n"
+                                response += "Please tell me which option you prefer, or type the doctor's name exactly as shown in the list."
                         except Exception as e:
                             logging.error(f"Error searching for doctor {doctor_name}: {e}")
                             response = f"I'm having trouble finding Dr. {doctor_name}. Would you like me to search by specialty instead?"
@@ -2790,9 +2822,14 @@ Would you like detailed information about any specific plan?"""
                         
                         if specialty:
                             # Get doctors for the requested specialty
+                            department = specialty  # Use specialty as department filter
                             doctors = None
                             try:
-                                doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                                # Pass both specialty and department to ensure proper filtering
+                                doctors = DatabaseHelper.get_doctors(specialty=specialty, department=department)
+                                # Additional filter to ensure only requested department specialists
+                                if doctors:
+                                    doctors = [d for d in doctors if specialty.lower() in str(d.get('specialty', '')).lower() or specialty.lower() in str(d.get('department', '')).lower()]
                             except Exception as e:
                                 logging.debug(f"Could not fetch doctors: {e}")
                             
@@ -2800,28 +2837,28 @@ Would you like detailed information about any specific plan?"""
                                 specialty_name = specialty.replace('_', ' ').title()
                                 response = f"Great! I can help you book an appointment with a {specialty_name}. Here are available {specialty_name}s:\n\n"
                                 for i, doc in enumerate(doctors[:5], 1):  # Show up to 5
-                                    response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
+                                    response += f"{i}. Dr. {doc.get('name', 'N/A')}\n"
                                     response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
                                     if doc.get('phone'):
                                         response += f"   Phone: {doc.get('phone')}\n"
                                     response += "\n"
-                                response += "**To book an appointment, simply tell me:**\n"
-                                response += "• The doctor's name (e.g., 'book Dr. [Name]')\n"
-                                response += "• Or the doctor's number (e.g., 'book doctor 1')\n"
-                                response += "• Then provide your preferred date and time\n\n"
-                                response += "**Example:** 'book Dr. [Name] tomorrow at 10 AM'"
+                                response += "To book an appointment, simply tell me:\n"
+                                response += "1. The doctor's name (e.g., 'book Dr. [Name]' or just type the name)\n"
+                                response += "2. Or the doctor's number (e.g., 'book doctor 1')\n"
+                                response += "3. Then provide your preferred date and time\n\n"
+                                response += "Example: 'book Dr. [Name] tomorrow at 10 AM' or just type '[Name]'"
                             else:
                                 response = f"I can help you book an appointment with a {specialty.replace('_', ' ').title()}! Let me search for available doctors. Would you like me to find available {specialty.replace('_', ' ').title()}s for you?"
                         else:
                             # Generic booking request - provide helpful guidance
                             response = "I'd be happy to help you book an appointment! Here's how:\n\n"
-                            response += "**Option 1:** Tell me a specific doctor's name\n"
-                            response += "   Example: 'book Dr. Lisa Anderson'\n\n"
-                            response += "**Option 2:** Tell me the specialty you need\n"
+                            response += "1. Tell me a specific doctor's name\n"
+                            response += "   Example: 'book Dr. Lisa Anderson' or just type 'Lisa Anderson'\n\n"
+                            response += "2. Tell me the specialty you need\n"
                             response += "   Example: 'book an appointment with a gynecologist'\n\n"
-                            response += "**Option 3:** Tell me your symptoms\n"
+                            response += "3. Tell me your symptoms\n"
                             response += "   Example: 'I need to see a doctor for headaches'\n\n"
-                            response += "**What would you like to do?**"
+                            response += "What would you like to do?"
                 elif any(word in msg_lower for word in ["show", "all", "list", "available"]) and "doctor" in msg_lower:
                     # User wants to see all doctors - get all doctors from database
                     doctors = None
@@ -2857,9 +2894,9 @@ Would you like detailed information about any specific plan?"""
                                 response += f"    Phone: {doc.get('phone')}\n"
                             response += "\n"
                         response += " **Next Steps:**\n"
-                        response += "• Would you like to book an appointment with any of these doctors?\n"
-                        response += "• I can help you find a specific specialist\n"
-                        response += "• I can assist with scheduling\n\n"
+                        response += "1. Would you like to book an appointment with any of these doctors?\n"
+                        response += "2. I can help you find a specific specialist\n"
+                        response += "3. I can assist with scheduling\n\n"
                         response += "Which doctor would you like to book an appointment with?"
                     else:
                         # ALWAYS use sample doctors if database fails
@@ -2925,9 +2962,9 @@ Would you like detailed information about any specific plan?"""
                             else:
                                 response = f"I couldn't find a doctor named '{doctor_name}' in our system.\n\n"
                                 response += "**Would you like me to:**\n"
-                                response += "• Search by specialty instead?\n"
-                                response += "• Show all available doctors?\n"
-                                response += "• Help you find a doctor for your symptoms?"
+                                response += "1. Search by specialty instead?\n"
+                                response += "2. Show all available doctors?\n"
+                                response += "3. Help you find a doctor for your symptoms?"
                         except Exception as e:
                             logging.error(f"Error searching for doctor {doctor_name}: {e}")
                             response = f"I'm having trouble finding Dr. {doctor_name}. Would you like me to search by specialty instead?"
@@ -2974,22 +3011,29 @@ Would you like detailed information about any specific plan?"""
                             except Exception as e:
                                 logging.debug(f"RAG retrieval failed: {e}")
                         
+                        # Set department to match specialty for proper filtering
+                        department = specialty  # Use specialty as department filter
+                        
                         # Attempt 2: Use DatabaseHelper if RAG didn't work
                         if not doctors or len(doctors) == 0:
                             try:
-                                doctors = DatabaseHelper.get_doctors(specialty=specialty)
+                                # Pass both specialty and department to ensure proper filtering
+                                doctors = DatabaseHelper.get_doctors(specialty=specialty, department=department)
                                 if doctors:
-                                    logging.info(f"DatabaseHelper: Retrieved {len(doctors)} {specialty_display_name}s from database")
+                                    # Additional filter to ensure only requested department specialists
+                                    doctors = [d for d in doctors if specialty.lower() in str(d.get('specialty', '')).lower() or specialty.lower() in str(d.get('department', '')).lower()]
+                                    if doctors:
+                                        logging.info(f"DatabaseHelper: Retrieved {len(doctors)} {specialty_display_name}s from database")
                             except Exception as e:
                                 logging.debug(f"DatabaseHelper retrieval failed: {e}")
                         
-                        # Attempt 3: Try without specialty filter to get all doctors
+                        # Attempt 3: Try without specialty filter to get all doctors, then filter
                         if not doctors or len(doctors) == 0:
                             try:
                                 all_doctors = DatabaseHelper.get_doctors()  # Get all doctors
                                 if all_doctors and specialty:
-                                    # Filter by specialty manually
-                                    doctors = [d for d in all_doctors if specialty.lower() in str(d.get('specialty', '')).lower()]
+                                    # Filter by specialty AND department manually
+                                    doctors = [d for d in all_doctors if specialty.lower() in str(d.get('specialty', '')).lower() or specialty.lower() in str(d.get('department', '')).lower()]
                                     if doctors:
                                         logging.info(f"Manual filter: Found {len(doctors)} {specialty_display_name}s")
                             except Exception as e:
@@ -2998,26 +3042,26 @@ Would you like detailed information about any specific plan?"""
                         # BUILD RESPONSE with database results
                         if doctors and len(doctors) > 0:
                             # SUCCESS: Build detailed response with actual doctors from database
-                            response = f"✅ **I found {len(doctors)} {specialty_display_name}{'s' if len(doctors) > 1 else ''} in our database:**\n\n"
+                            response = f"I found {len(doctors)} {specialty_display_name}{'s' if len(doctors) > 1 else ''}:\n\n"
                             for i, doc in enumerate(doctors[:5], 1):  # Show first 5
-                                response += f"**{i}. Dr. {doc.get('name', 'N/A')}**\n"
-                                response += f"   📋 Specialty: {doc.get('specialty', 'General Medicine')}\n"
-                                response += f"   🏥 Department: {doc.get('department', 'N/A')}\n"
+                                response += f"{i}. Dr. {doc.get('name', 'N/A')}\n"
+                                response += f"   Specialty: {doc.get('specialty', 'General Medicine')}\n"
+                                response += f"   Department: {doc.get('department', 'N/A')}\n"
                                 if doc.get('phone'):
-                                    response += f"   📞 Phone: {doc.get('phone')}\n"
+                                    response += f"   Phone: {doc.get('phone')}\n"
                                 if doc.get('email'):
-                                    response += f"   ✉️ Email: {doc.get('email')}\n"
+                                    response += f"   Email: {doc.get('email')}\n"
                                 if doc.get('experience_years'):
-                                    response += f"   👨‍⚕️ Experience: {doc.get('experience_years')} years\n"
+                                    response += f"   Experience: {doc.get('experience_years')} years\n"
                                 if doc.get('rating'):
-                                    response += f"   ⭐ Rating: {doc.get('rating')}/5\n"
+                                    response += f"   Rating: {doc.get('rating')}/5\n"
                                 response += "\n"
                             
-                            response += f"📅 **Next Steps:**\n"
-                            response += f"• I can help you book an appointment with any of these {specialty_display_name}s\n"
-                            response += f"• Just tell me the doctor's name or number (e.g., 'Book with Dr. Smith' or 'I want doctor #1')\n"
-                            response += f"• I'll check their availability and schedule your visit!\n\n"
-                            response += f"Which {specialty_display_name} would you like to see?"
+                            response += f"Next Steps:\n"
+                            response += f"1. Tell me the doctor's name (e.g., 'book Dr. [Name]')\n"
+                            response += f"2. Or tell me the doctor's number (e.g., 'book doctor 1')\n"
+                            response += f"3. Then provide your preferred date and time\n\n"
+                            response += f"Which {specialty_display_name} would you like to book with?"
                             
                             logging.info(f"Successfully showed {len(doctors)} {specialty_display_name}s from database to user")
                         else:
@@ -3026,8 +3070,8 @@ Would you like detailed information about any specific plan?"""
                             response = f"I'm currently searching our database for available {specialty_display_name}s. "
                             response += f"While I search, here's what I can help you with:\n\n"
                             response += f"📞 **Immediate Help:**\n"
-                            response += f"• Call our appointment line: (555) 123-4567\n"
-                            response += f"• Visit our website to see all available {specialty_display_name}s\n\n"
+                            response += f"1. Call our appointment line: (555) 123-4567\n"
+                            response += f"2. Visit our website to see all available {specialty_display_name}s\n\n"
                             response += f"💬 **I can also help you:**\n"
                             response += f"• Describe your symptoms for recommendations\n"
                             response += f"• Check insurance coverage\n"
@@ -3993,10 +4037,17 @@ class ActionDoctorsList(Action):
         elif "psychiatrist" in user_message or "psychiatry" in user_message:
             specialty = "psychiatry"
         
+        # Set department to match specialty for proper filtering
+        department = specialty if specialty else None
+        
         # Try database first (faster and more reliable)
         doctors = None
         try:
-            doctors = DatabaseHelper.get_doctors(specialty=specialty)
+            # Pass both specialty and department to ensure proper filtering
+            doctors = DatabaseHelper.get_doctors(specialty=specialty, department=department)
+            # Additional filter to ensure only requested department specialists
+            if doctors and specialty:
+                doctors = [d for d in doctors if specialty.lower() in str(d.get('specialty', '')).lower() or specialty.lower() in str(d.get('department', '')).lower()]
         except Exception as e:
             logging.debug(f"Database query failed, trying API: {e}")
         
@@ -4008,9 +4059,9 @@ class ActionDoctorsList(Action):
                 api_doctors = response.json()
             
                 if api_doctors:
-                    # Filter by specialty if specified
+                    # Filter by specialty AND department if specified
                     if specialty:
-                        api_doctors = [d for d in api_doctors if specialty.lower() in d.get('specialty', '').lower()]
+                        api_doctors = [d for d in api_doctors if specialty.lower() in d.get('specialty', '').lower() or specialty.lower() in d.get('department', '').lower()]
                     
                     doctors = [{
                         'name': d.get('name', 'N/A'),
@@ -4025,20 +4076,20 @@ class ActionDoctorsList(Action):
         # Build response message
         if doctors and len(doctors) > 0:
             specialty_name = specialty.replace('_', ' ').title() if specialty else "doctor"
-            message = f" **Available {specialty_name.title()}s:**\n\n"
+            message = f"Available {specialty_name.title()}s:\n\n"
             for i, doctor in enumerate(doctors[:5], 1):  # Show first 5
-                message += f"**{i}. Dr. {doctor.get('name', 'N/A')}**\n"
-                message += f"    Specialty: {doctor.get('specialty', 'General Medicine')}\n"
-                message += f"    Department: {doctor.get('department', 'N/A')}\n"
+                message += f"{i}. Dr. {doctor.get('name', 'N/A')}\n"
+                message += f"   Specialty: {doctor.get('specialty', 'General Medicine')}\n"
+                message += f"   Department: {doctor.get('department', 'N/A')}\n"
                 if doctor.get('phone') and doctor.get('phone') != 'N/A':
-                    message += f"    Phone: {doctor.get('phone')}\n"
+                    message += f"   Phone: {doctor.get('phone')}\n"
                 if doctor.get('email') and doctor.get('email') != 'N/A':
-                    message += f"   📧 Email: {doctor.get('email')}\n"
+                    message += f"   Email: {doctor.get('email')}\n"
                 message += "\n"
-            message += " **Next Steps:**\n"
-            message += "• Would you like to book an appointment with any of these doctors?\n"
-            message += "• I can help you check their availability\n"
-            message += "• I can assist with scheduling\n\n"
+            message += "Next Steps:\n"
+            message += "1. Tell me the doctor's name (e.g., 'book Dr. [Name]' or just type the name)\n"
+            message += "2. Or tell me the doctor's number (e.g., 'book doctor 1')\n"
+            message += "3. Then provide your preferred date and time\n\n"
             message += "Which doctor would you like to book an appointment with?"
         else:
             specialty_name = specialty.replace('_', ' ').title() if specialty else "doctor"
